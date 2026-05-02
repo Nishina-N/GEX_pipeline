@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python scripts/2_calculate_gex.py)",
+      "Bash(python scripts/3_extract_levels.py)",
+      "Bash(python scripts/4_export_to_json.py)"
+    ]
+  }
+}

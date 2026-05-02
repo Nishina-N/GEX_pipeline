@@ -332,7 +332,8 @@ def calculate_gex_for_symbol(options_data, config):
     chain = options_data['chain'].copy()
 
     r = config.get('risk_free_rate', 0.045)
-    q = config.get('dividend_yield_default', 0.013)
+    dividend_yields = config.get('dividend_yields', {})
+    q = dividend_yields.get(symbol, config.get('dividend_yield_default', 0.013))
     contract_size = config.get('contract_size', 100)
 
     today = datetime.now()

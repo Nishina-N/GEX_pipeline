@@ -1,6 +1,16 @@
 {
   "risk_free_rate": 0.045,
   "dividend_yield_default": 0.013,
+  "dividend_yields": {
+    "SPY":  0.013,
+    "QQQ":  0.006,
+    "SMH":  0.005,
+    "DIA":  0.017,
+    "IWM":  0.014,
+    "NVDA": 0.0003,
+    "AAPL": 0.005,
+    "TSLA": 0.0
+  },
   "contract_size": 100,
   "max_expiry_days": 90,
   "top_n_levels": 3,
@@ -13,8 +23,11 @@
   "target_symbols": [
     "SPY",
     "QQQ",
-    "SOXX",
+    "SMH",
     "DIA",
-    "IWM"
+    "IWM",
+    "NVDA",
+    "AAPL",
+    "TSLA"
   ]
 }
