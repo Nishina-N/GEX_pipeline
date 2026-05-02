@@ -1,0 +1,371 @@
+"""
+3_extract_levels.py
+
+ストライク別 Net GEX プロファイルから主要 GEX レベルを抽出する。
+
+抽出対象:
+  - HVL (Gamma Flip / Zero Gamma Level)
+  - Call Resistance / Call Walls（正 Net GEX 上位N本）
+  - Put Support / Put Walls（負 Net GEX 上位N本）
+  - Transition Zone（PutSupport〜CallResistance の帯域）
+
+集計タイプごとに独立して抽出:
+  - total     : 全満期合算
+  - short_term: DTE 0-7
+  - long_term : 次の2月次SQ
+"""
+
+import os
+import sys
+import json
+import pickle
+import logging
+
+import numpy as np
+import pandas as pd
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+DATA_FOLDER = "data"
+GEX_DIR = os.path.join(DATA_FOLDER, "gex")
+LEVELS_DIR = os.path.join(DATA_FOLDER, "levels")
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "settings.json")
+
+
+def load_config():
+    with open(CONFIG_PATH, "r") as f:
+        return json.load(f)
+
+
+# ─────────────────────────────────────────────────────────────
+# HVL (Gamma Flip)
+# ─────────────────────────────────────────────────────────────
+
+def find_hvl(gex_df, spot_price):
+    """
+    Net GEX が正→負（または負→正）に切り替わるストライクを線形補間で算出する。
+    複数のゼロクロスが存在する場合、spot_price に最も近いものを返す。
+
+    Returns:
+        float or None
+    """
+    df = gex_df.sort_values('strike').reset_index(drop=True)
+    strikes = df['strike'].values
+    net_gex = df['netGEX'].values
+
+    zero_crossings = []
+    for i in range(len(net_gex) - 1):
+        if net_gex[i] * net_gex[i + 1] < 0:
+            s1, s2 = strikes[i], strikes[i + 1]
+            g1, g2 = net_gex[i], net_gex[i + 1]
+            zero_strike = s1 + (s2 - s1) * (-g1) / (g2 - g1)
+            zero_crossings.append(zero_strike)
+
+    if not zero_crossings:
+        # ゼロクロスなし → Net GEX が 0 に最も近いストライクを返す
+        closest_idx = np.argmin(np.abs(net_gex))
+        return float(strikes[closest_idx])
+
+    distances = [abs(zc - spot_price) for zc in zero_crossings]
+    return float(zero_crossings[np.argmin(distances)])
+
+
+# ─────────────────────────────────────────────────────────────
+# Call Wall / Put Wall
+# ─────────────────────────────────────────────────────────────
+
+def find_walls(gex_df, top_n=3):
+    """
+    Call Wall（正 Net GEX 上位）と Put Wall（負 Net GEX 上位）を抽出する。
+
+    仕様 §4.2-4.3:
+      Call Resistance = argmax NETGEX(K) > 0  （上値抵抗）
+      Put Support     = argmin NETGEX(K) < 0  （下値支持）
+
+    Returns:
+        dict: {
+            'callWalls': [{'strike': float, 'netGEX': float}, ...],  # 降順
+            'putWalls':  [{'strike': float, 'netGEX': float}, ...],  # 昇順（絶対値降順）
+        }
+    """
+    df = gex_df.copy()
+
+    positive = df[df['netGEX'] > 0].nlargest(top_n, 'netGEX')
+    call_walls = [
+        {'strike': float(row['strike']), 'netGEX': float(row['netGEX'])}
+        for _, row in positive.iterrows()
+    ]
+
+    negative = df[df['netGEX'] < 0].nsmallest(top_n, 'netGEX')
+    put_walls = [
+        {'strike': float(row['strike']), 'netGEX': float(row['netGEX'])}
+        for _, row in negative.iterrows()
+    ]
+
+    return {'callWalls': call_walls, 'putWalls': put_walls}
+
+
+# ─────────────────────────────────────────────────────────────
+# 1つの GEX DataFrame からレベルセットを抽出するヘルパー
+# ─────────────────────────────────────────────────────────────
+
+def extract_level_set(gex_df, spot_price, top_n=3):
+    """
+    1つの集計 GEX DataFrame (gex_by_strike / gex_short_term / gex_long_term)
+    から HVL・Call/Put Wall・Transition Zone を抽出してまとめて返す。
+
+    Returns:
+        dict or None (gex_df が None または空の場合)
+    """
+    if gex_df is None or gex_df.empty:
+        return None
+
+    hvl = find_hvl(gex_df, spot_price)
+    walls = find_walls(gex_df, top_n=top_n)
+
+    call_wall = walls['callWalls'][0]['strike'] if walls['callWalls'] else None
+    put_wall = walls['putWalls'][0]['strike'] if walls['putWalls'] else None
+
+    # Transition Zone: Put Support〜Call Resistance の帯域
+    transition_zone = None
+    if put_wall is not None and call_wall is not None:
+        transition_zone = {
+            'lower': put_wall,
+            'upper': call_wall
+        }
+
+    # ゾーン判定（spot と HVL の位置関係）
+    sentiment = 'neutral'
+    if hvl is not None:
+        sentiment = 'positive_gamma' if spot_price > hvl else 'negative_gamma'
+
+    return {
+        'hvl': hvl,
+        'callWall': call_wall,
+        'putWall': put_wall,
+        'callWalls': walls['callWalls'],
+        'putWalls': walls['putWalls'],
+        'transition_zone': transition_zone,
+        'sentiment': sentiment,
+    }
+
+
+# ─────────────────────────────────────────────────────────────
+# GEX プロファイル（ヒストグラム用）
+# ─────────────────────────────────────────────────────────────
+
+def build_profile(gex_df, spot_price, range_pct=0.20):
+    """
+    スポット価格 ± range_pct 以内のストライクを抽出してプロファイルリストを返す。
+    """
+    if gex_df is None or gex_df.empty:
+        return []
+
+    price_range = spot_price * range_pct
+    filtered = gex_df[
+        (gex_df['strike'] >= spot_price - price_range) &
+        (gex_df['strike'] <= spot_price + price_range)
+    ]
+
+    return [
+        {
+            'strike': float(row['strike']),
+            'callGEX': float(row['callGEX']),
+            'putGEX': float(row['putGEX']),
+            'netGEX': float(row['netGEX']),
+        }
+        for _, row in filtered.iterrows()
+    ]
+
+
+# ─────────────────────────────────────────────────────────────
+# メイン抽出
+# ─────────────────────────────────────────────────────────────
+
+def extract_levels_for_symbol(gex_data, config):
+    """
+    1銘柄の GEX データから全レベルを抽出する。
+
+    出力 JSON 構造:
+    {
+      "ticker": str,
+      "date": str,
+      "spotPrice": float,
+      "totalGEX": float,
+      "sentiment": str,          # 全体 GEX 基準
+      "levels": {
+        # 全満期合算
+        "hvl": float,
+        "callWall": float,
+        "putWall": float,
+        "callWalls": [...],
+        "putWalls": [...],
+        "transition_zone": {"lower": float, "upper": float},
+
+        # 短期・長期
+        "short_term": { hvl, callWall, putWall, callWalls, putWalls,
+                        transition_zone, sentiment },
+        "long_term":  { hvl, callWall, putWall, callWalls, putWalls,
+                        transition_zone, sentiment },
+      },
+      "profile": {
+        "total":      [...],   # 全満期プロファイル
+        "short_term": [...],
+        "long_term":  [...],
+      },
+      "zeroDTE": {...} or null,
+      "expirationInfo": {
+        "shortTermExpirations": [...],
+        "longTermExpirations": [...],
+      },
+      "metadata": {...}
+    }
+    """
+    symbol = gex_data['symbol']
+    spot = gex_data['spot_price']
+    date = gex_data['date']
+    total_gex = gex_data['total_gex']
+
+    top_n = config.get('top_n_levels', 3)
+
+    # ── 各集計タイプのレベル抽出 ──────────────────────────────
+    levels_total = extract_level_set(gex_data['gex_by_strike'], spot, top_n)
+    levels_st = extract_level_set(gex_data.get('gex_short_term'), spot, top_n)
+    levels_lt = extract_level_set(gex_data.get('gex_long_term'), spot, top_n)
+
+    if levels_total is None:
+        logging.warning(f"[{symbol}] No GEX data to extract levels from")
+        return None
+
+    # ── GEX プロファイル ──────────────────────────────────────
+    profile_total = build_profile(gex_data['gex_by_strike'], spot)
+    profile_st = build_profile(gex_data.get('gex_short_term'), spot)
+    profile_lt = build_profile(gex_data.get('gex_long_term'), spot)
+
+    # ── 0DTE サマリ ───────────────────────────────────────────
+    gex_0dte = gex_data.get('gex_0dte')
+    zero_dte_info = None
+    if gex_0dte is not None and not gex_0dte.empty:
+        dte_total = float(gex_0dte['netGEX'].sum())
+        dte_top = gex_0dte.reindex(gex_0dte['netGEX'].abs().nlargest(top_n).index)
+        zero_dte_info = {
+            'totalGEX': dte_total,
+            'topStrikes': [
+                {'strike': float(row['strike']), 'netGEX': float(row['netGEX'])}
+                for _, row in dte_top.iterrows()
+            ],
+        }
+
+    result = {
+        'ticker': symbol,
+        'date': date,
+        'spotPrice': float(spot),
+        'totalGEX': float(total_gex),
+        'sentiment': levels_total['sentiment'],
+        'levels': {
+            # 全満期合算
+            'hvl': levels_total['hvl'],
+            'callWall': levels_total['callWall'],
+            'putWall': levels_total['putWall'],
+            'callWalls': levels_total['callWalls'],
+            'putWalls': levels_total['putWalls'],
+            'transition_zone': levels_total['transition_zone'],
+            # 短期・長期
+            'short_term': levels_st,
+            'long_term': levels_lt,
+        },
+        'profile': {
+            'total': profile_total,
+            'short_term': profile_st,
+            'long_term': profile_lt,
+        },
+        'zeroDTE': zero_dte_info,
+        'expirationInfo': {
+            'shortTermExpirations': gex_data.get('short_term_expirations', []),
+            'longTermExpirations': gex_data.get('long_term_expirations', []),
+        },
+        'metadata': {
+            'expirations_used': gex_data.get('expirations_used', 0),
+            'total_contracts': gex_data.get('total_contracts', 0),
+            'profile_range_pct': 20,
+            'calculation_time': pd.Timestamp.now().isoformat(),
+        },
+    }
+
+    # ── ログ ──────────────────────────────────────────────────
+    def _fmt(level_set, label):
+        if level_set is None:
+            return f"{label}: (データなし)"
+        hvl = level_set['hvl']
+        cw = level_set['callWall']
+        pw = level_set['putWall']
+        sent = level_set['sentiment']
+        hvl_s = f"{hvl:.2f}" if hvl is not None else 'N/A'
+        cw_s  = f"{cw:.1f}"  if cw  is not None else 'N/A'
+        pw_s  = f"{pw:.1f}"  if pw  is not None else 'N/A'
+        return f"{label}: HVL={hvl_s}, Call={cw_s}, Put={pw_s}, {sent}"
+
+    logging.info(f"[{symbol}] " + _fmt(levels_total, "Total"))
+    logging.info(f"[{symbol}] " + _fmt(levels_st, "ShortTerm"))
+    logging.info(f"[{symbol}] " + _fmt(levels_lt, "LongTerm"))
+
+    return result
+
+
+def main():
+    config = load_config()
+    os.makedirs(LEVELS_DIR, exist_ok=True)
+
+    logging.info("=" * 60)
+    logging.info("EXTRACT GEX LEVELS")
+    logging.info("=" * 60)
+
+    if not os.path.exists(GEX_DIR):
+        logging.error(f"GEX data directory not found: {GEX_DIR}")
+        return False
+
+    pkl_files = [f for f in os.listdir(GEX_DIR) if f.endswith('.pkl')]
+    if not pkl_files:
+        logging.error("No GEX data files found")
+        return False
+
+    success_count = 0
+    fail_count = 0
+
+    for pkl_file in pkl_files:
+        symbol = pkl_file.replace('.pkl', '')
+
+        try:
+            with open(os.path.join(GEX_DIR, pkl_file), 'rb') as f:
+                gex_data = pickle.load(f)
+
+            result = extract_levels_for_symbol(gex_data, config)
+
+            if result:
+                output_path = os.path.join(LEVELS_DIR, f"{symbol}.json")
+                with open(output_path, 'w') as f:
+                    json.dump(result, f, indent=2)
+                success_count += 1
+                logging.info(f"[{symbol}] Saved to {output_path}")
+            else:
+                fail_count += 1
+
+        except Exception as e:
+            logging.error(f"[{symbol}] Error: {e}", exc_info=True)
+            fail_count += 1
+
+    logging.info("=" * 60)
+    logging.info(f"Success: {success_count}, Failed: {fail_count}")
+    logging.info("=" * 60)
+
+    return success_count > 0
+
+
+if __name__ == "__main__":
+    if main():
+        sys.exit(0)
+    else:
+        sys.exit(1)

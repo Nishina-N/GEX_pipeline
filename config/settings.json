@@ -1,0 +1,20 @@
+{
+  "risk_free_rate": 0.045,
+  "dividend_yield_default": 0.013,
+  "contract_size": 100,
+  "max_expiry_days": 90,
+  "top_n_levels": 3,
+  "gex_retention_days": 30,
+  "rate_limit": {
+    "delay_between_symbols": 1.5,
+    "max_retries": 3,
+    "backoff_factor": 2
+  },
+  "target_symbols": [
+    "SPY",
+    "QQQ",
+    "SOXX",
+    "DIA",
+    "IWM"
+  ]
+}
