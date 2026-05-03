@@ -5,6 +5,10 @@ on:
     - cron: '30 22 * * 1-5'  # Mon-Fri 22:30 UTC (after stock-data-pipeline)
   workflow_dispatch:
 
+concurrency:
+  group: gex-pipeline
+  cancel-in-progress: false  # 実行中のRunは中断しない（完了を待つ）
+
 permissions:
   contents: write   # charts を GitHub にコミット・プッシュするために必要
 
