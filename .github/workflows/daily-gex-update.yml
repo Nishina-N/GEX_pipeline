@@ -77,7 +77,7 @@ jobs:
           
           git add charts/$DATE/
           git diff --staged --quiet || git commit -m "chore: GEX charts $DATE"
-          git pull
+          git pull --rebase
           git push
         timeout-minutes: 5
 
