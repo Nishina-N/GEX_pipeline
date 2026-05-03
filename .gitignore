@@ -28,3 +28,10 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Node.js
+node_modules/
+package-lock.json
+
+# note.com 記事生成（一時ファイル）
+note-article/

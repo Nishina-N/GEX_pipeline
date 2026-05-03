@@ -1,0 +1,8 @@
+{
+  "name": "gex-note-poster",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "marked": "^9.0.0"
+  }
+}

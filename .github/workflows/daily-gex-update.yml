@@ -14,7 +14,7 @@ env:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 50
 
     steps:
       - name: Checkout repository
@@ -79,9 +79,25 @@ jobs:
           git push
         timeout-minutes: 5
 
+      - name: 7. Generate note.com article
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          mkdir -p note-article
+          python scripts/7_generate_note_article.py
+        timeout-minutes: 5
+
+      - name: 8. Post GEX report to note.com
+        env:
+          NOTE_SESSION_COOKIE: ${{ secrets.NOTE_SESSION_COOKIE }}
+        run: |
+          npm ci
+          node scripts/8_post_note.mjs
+        timeout-minutes: 5
+
       - name: Cleanup temporary data
         if: always()
-        run: rm -rf data/options data/gex data/levels data/iv_history data/r2 data/charts
+        run: rm -rf data/options data/gex data/levels data/iv_history data/r2 data/charts note-article
 
       - name: Upload logs (on failure)
         if: failure()
