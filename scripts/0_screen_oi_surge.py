@@ -501,14 +501,17 @@ def _main_impl(args) -> bool:
     date_str = args.date or datetime.now().strftime("%Y-%m-%d")
     yesterday_str = (datetime.strptime(date_str, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    # R2クライアント（dry-runでも生成するがアップロードはスキップ）
+    # R2クライアント（dry-run時はR2操作を全てスキップ）
     r2_client = None
     r2_available = False
-    try:
-        r2_client    = create_r2_client()
-        r2_available = True
-    except Exception as e:
-        logging.warning(f"[R2] Client creation failed: {e}. Will skip R2 operations.")
+    if args.dry_run:
+        logging.info("[R2] Dry-run mode: skipping all R2 operations")
+    else:
+        try:
+            r2_client    = create_r2_client()
+            r2_available = True
+        except Exception as e:
+            logging.warning(f"[R2] Client creation failed: {e}. Will skip R2 operations.")
 
     # ─── ユニバース構築 ─────────────────────────────────────────────
     if args.symbols:
