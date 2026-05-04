@@ -332,32 +332,24 @@ def fetch_oi_snapshot(symbol: str, config: dict) -> dict | None:
         return None
 
 
-def fetch_oi_snapshots_parallel(symbols: list[str], config: dict) -> dict[str, dict]:
-    """全銘柄のOIスナップショットを並列取得"""
-    workers     = config["performance"]["oi_workers"]
-    batch_size  = config["performance"]["batch_size"]
-    batch_delay = config["performance"]["batch_delay_seconds"]
+def fetch_oi_snapshots_sequential(symbols: list[str], config: dict) -> dict[str, dict]:
+    """全銘柄のOIスナップショットを順次取得（レート制限対策）"""
+    delay   = config["performance"].get("oi_delay_seconds", 1.5)
     results: dict[str, dict] = {}
-
-    batches = [symbols[i:i+batch_size] for i in range(0, len(symbols), batch_size)]
     total   = len(symbols)
 
-    logging.info(f"[OI] Fetching {total} symbols in {len(batches)} batches ({workers} workers)...")
+    logging.info(f"[OI] Fetching {total} symbols sequentially (delay={delay}s)...")
 
-    for batch_idx, batch in enumerate(batches):
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {executor.submit(fetch_oi_snapshot, sym, config): sym for sym in batch}
-            for future in as_completed(futures):
-                sym    = futures[future]
-                result = future.result()
-                if result:
-                    results[sym] = result
+    for i, sym in enumerate(symbols):
+        result = fetch_oi_snapshot(sym, config)
+        if result:
+            results[sym] = result
 
-        fetched = len(results)
-        logging.info(f"[OI] Batch {batch_idx+1}/{len(batches)} done. {fetched} snapshots so far.")
+        if (i + 1) % 50 == 0:
+            logging.info(f"[OI] {i+1}/{total} processed, {len(results)} fetched so far.")
 
-        if batch_idx < len(batches) - 1:
-            time.sleep(batch_delay)
+        if i < total - 1:
+            time.sleep(delay)
 
     logging.info(f"[OI] Completed: {len(results)}/{total} symbols fetched")
     return results
@@ -626,7 +618,7 @@ def _main_impl(args) -> bool:
         logging.info("[Screener] Market cap from cache — skipping cooldown.")
 
     # ─── 本日OIスナップショット取得 ─────────────────────────────────
-    today_snapshots = fetch_oi_snapshots_parallel(filtered_symbols, config)
+    today_snapshots = fetch_oi_snapshots_sequential(filtered_symbols, config)
 
     # ─── 当日OIキャッシュをR2に保存（翌日の前日比計算用） ────────────
     if r2_available and today_snapshots:

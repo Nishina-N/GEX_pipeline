@@ -41,7 +41,8 @@
     "market_cap_workers": 4,
     "market_cap_batch_size": 30,
     "market_cap_batch_delay_seconds": 2.0,
-    "oi_workers": 5,
+    "oi_workers": 1,
+    "oi_delay_seconds": 1.5,
     "batch_size": 30,
     "batch_delay_seconds": 5.0
   },
