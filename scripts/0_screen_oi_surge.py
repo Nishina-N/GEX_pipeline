@@ -207,17 +207,19 @@ def save_mktcap_cache_to_r2(symbols: list[str], s3_client, dry_run: bool = False
 
 
 def filter_by_market_cap(symbols: list[str], config: dict,
-                         s3_client=None, dry_run: bool = False) -> list[str]:
-    """$2B以上の銘柄に絞り込む。R2週次キャッシュがあればAPIを叩かない。"""
+                         s3_client=None, dry_run: bool = False) -> tuple[list[str], bool]:
+    """
+    $2B以上の銘柄に絞り込む。R2週次キャッシュがあればAPIを叩かない。
+    戻り値: (filtered_symbols, used_cache)
+    """
     # ── キャッシュ確認 ──────────────────────────────────────────────
     if s3_client and not dry_run:
         cached = load_mktcap_cache_from_r2(s3_client, config)
         if cached is not None:
-            # キャッシュにない銘柄はフィルタ済みとみなしてスキップ
             cached_set = set(cached)
             result = [s for s in symbols if s in cached_set]
             logging.info(f"[MarketCap] {len(result)}/{len(symbols)} symbols in cache")
-            return result
+            return result, True  # キャッシュ使用
 
     # ── キャッシュなし → API フェッチ ──────────────────────────────
     min_cap     = config["market_cap"]["min_market_cap"]
@@ -253,7 +255,7 @@ def filter_by_market_cap(symbols: list[str], config: dict,
     if s3_client:
         save_mktcap_cache_to_r2(passed, s3_client, dry_run=dry_run)
 
-    return passed
+    return passed, False  # フレッシュフェッチ
 
 
 # ─── OIスナップショット取得 ───────────────────────────────────────────────
@@ -604,8 +606,9 @@ def _main_impl(args) -> bool:
     # ─── 時価総額フィルタ ────────────────────────────────────────────
     if args.symbols:
         filtered_symbols = all_symbols  # テスト用オーバーライド時はスキップ
+        used_mktcap_cache = True
     else:
-        filtered_symbols = filter_by_market_cap(
+        filtered_symbols, used_mktcap_cache = filter_by_market_cap(
             all_symbols, config, s3_client=r2_client, dry_run=args.dry_run
         )
 
@@ -614,10 +617,13 @@ def _main_impl(args) -> bool:
     if r2_available:
         yesterday_cache = load_oi_cache_from_r2(yesterday_str, r2_client, config)
 
-    # ─── 時価総額フィルタ後にCrumbリセット待機 ──────────────────────────
-    cooldown = 30
-    logging.info(f"[Screener] Waiting {cooldown}s for yfinance rate limit cooldown...")
-    time.sleep(cooldown)
+    # ─── Crumbリセット待機（フレッシュフェッチ時のみ） ──────────────
+    if not used_mktcap_cache:
+        cooldown = 60
+        logging.info(f"[Screener] Fresh market cap fetch done. Waiting {cooldown}s for rate limit cooldown...")
+        time.sleep(cooldown)
+    else:
+        logging.info("[Screener] Market cap from cache — skipping cooldown.")
 
     # ─── 本日OIスナップショット取得 ─────────────────────────────────
     today_snapshots = fetch_oi_snapshots_parallel(filtered_symbols, config)
