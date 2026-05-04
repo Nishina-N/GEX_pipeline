@@ -59,11 +59,14 @@ def load_screener_config() -> dict:
 
 # ─── ユニバース取得 ───────────────────────────────────────────────────────
 
+_WIKI_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; GEX-pipeline/1.0)"}
+
 def get_sp500_symbols() -> list[str]:
     """S&P500構成銘柄をWikipediaから取得"""
     tables = pd.read_html(
         "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
-        attrs={"id": "constituents"}
+        attrs={"id": "constituents"},
+        storage_options=_WIKI_HEADERS,
     )
     symbols = tables[0]["Symbol"].tolist()
     # yfinance互換: BRK.B → BRK-B
@@ -72,7 +75,10 @@ def get_sp500_symbols() -> list[str]:
 
 def get_nasdaq100_symbols() -> list[str]:
     """NASDAQ100構成銘柄をWikipediaから取得"""
-    tables = pd.read_html("https://en.wikipedia.org/wiki/Nasdaq-100")
+    tables = pd.read_html(
+        "https://en.wikipedia.org/wiki/Nasdaq-100",
+        storage_options=_WIKI_HEADERS,
+    )
     # "Ticker" カラムを持つテーブルを探す
     for tbl in tables:
         cols = [str(c).strip() for c in tbl.columns]
@@ -254,7 +260,7 @@ def fetch_oi_snapshot(symbol: str, config: dict) -> dict | None:
         }
 
     except Exception as e:
-        logging.debug(f"[OI] {symbol}: {e}")
+        logging.warning(f"[OI] {symbol} failed: {type(e).__name__}: {e}")
         return None
 
 
@@ -539,6 +545,11 @@ def _main_impl(args) -> bool:
     yesterday_cache = None
     if r2_available:
         yesterday_cache = load_oi_cache_from_r2(yesterday_str, r2_client, config)
+
+    # ─── 時価総額フィルタ後にCrumbリセット待機 ──────────────────────────
+    cooldown = 30
+    logging.info(f"[Screener] Waiting {cooldown}s for yfinance rate limit cooldown...")
+    time.sleep(cooldown)
 
     # ─── 本日OIスナップショット取得 ─────────────────────────────────
     today_snapshots = fetch_oi_snapshots_parallel(filtered_symbols, config)
