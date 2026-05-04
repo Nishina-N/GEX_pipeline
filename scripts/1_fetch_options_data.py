@@ -181,10 +181,15 @@ def save_iv_snapshot(result, today_str):
             logging.debug(f"[{symbol}] Removed old IV snapshot: {fname}")
 
 
-def main(symbols=None):
+def main(symbols=None, symbols_from=None):
     config = load_config()
 
-    if symbols is None:
+    if symbols_from is not None:
+        with open(symbols_from, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        symbols = data["symbols"]
+        logging.info(f"Loaded {len(symbols)} symbols from {symbols_from}")
+    elif symbols is None:
         symbols = config['target_symbols']
 
     max_expiry_days = config.get('max_expiry_days', 90)
@@ -249,9 +254,13 @@ if __name__ == "__main__":
         '--symbols', nargs='+', default=None,
         help='Override target symbols (e.g., --symbols SPY AAPL TSLA)'
     )
+    parser.add_argument(
+        '--symbols-from', default=None,
+        help='Path to JSON file with symbol list (e.g., data/symbols_oi_surge.json)'
+    )
     args = parser.parse_args()
 
-    if main(symbols=args.symbols):
+    if main(symbols=args.symbols, symbols_from=args.symbols_from):
         sys.exit(0)
     else:
         sys.exit(1)

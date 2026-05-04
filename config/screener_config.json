@@ -1,0 +1,51 @@
+{
+  "_comment": "OI Surge Screener configuration",
+
+  "universe": {
+    "include_sp500": true,
+    "include_nasdaq100": true,
+    "include_russell2000": true,
+    "exclude_symbols": []
+  },
+
+  "market_cap": {
+    "min_market_cap": 2000000000
+  },
+
+  "options": {
+    "max_expiry_days": 90
+  },
+
+  "screening": {
+    "min_oi_change_pct": 20.0,
+    "min_total_oi": 1000,
+    "top_n": 50
+  },
+
+  "scoring": {
+    "call_oi_change_weight": 0.4,
+    "pcr_weight": 0.3,
+    "otm_call_ratio_weight": 0.3,
+    "pcr_threshold_high": 1.5,
+    "pcr_threshold_range": 1.0,
+    "otm_call_ratio_cap": 0.7,
+    "otm_strike_multiplier": 1.02
+  },
+
+  "output": {
+    "max_symbols": 20,
+    "always_include": ["SPY", "QQQ", "SMH", "DIA", "IWM"]
+  },
+
+  "performance": {
+    "market_cap_workers": 20,
+    "oi_workers": 10,
+    "batch_size": 50,
+    "batch_delay_seconds": 3.0
+  },
+
+  "r2": {
+    "oi_cache_prefix": "gex/oi_cache",
+    "cache_retention_days": 7
+  }
+}
