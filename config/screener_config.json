@@ -38,10 +38,12 @@
   },
 
   "performance": {
-    "market_cap_workers": 20,
-    "oi_workers": 10,
-    "batch_size": 50,
-    "batch_delay_seconds": 3.0
+    "market_cap_workers": 4,
+    "market_cap_batch_size": 30,
+    "market_cap_batch_delay_seconds": 2.0,
+    "oi_workers": 5,
+    "batch_size": 30,
+    "batch_delay_seconds": 5.0
   },
 
   "r2": {

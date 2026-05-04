@@ -152,24 +152,33 @@ def _fetch_market_cap_single(symbol: str, min_cap: int) -> str | None:
 
 
 def filter_by_market_cap(symbols: list[str], config: dict) -> list[str]:
-    """$2B以上の銘柄に絞り込む（並列）"""
-    min_cap  = config["market_cap"]["min_market_cap"]
-    workers  = config["performance"]["market_cap_workers"]
-    passed   = []
-    total    = len(symbols)
+    """$2B以上の銘柄に絞り込む（バッチ並列 — Crumb無効化を防ぐため低並列）"""
+    min_cap     = config["market_cap"]["min_market_cap"]
+    workers     = config["performance"]["market_cap_workers"]
+    batch_size  = config["performance"].get("market_cap_batch_size", 30)
+    batch_delay = config["performance"].get("market_cap_batch_delay_seconds", 2.0)
+    passed      = []
+    total       = len(symbols)
 
-    logging.info(f"[MarketCap] Filtering {total} symbols (min ${min_cap/1e9:.1f}B)...")
+    logging.info(f"[MarketCap] Filtering {total} symbols (min ${min_cap/1e9:.1f}B, {workers} workers, batch={batch_size})...")
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(_fetch_market_cap_single, sym, min_cap): sym for sym in symbols}
-        done = 0
-        for future in as_completed(futures):
-            done += 1
-            result = future.result()
-            if result:
-                passed.append(result)
-            if done % 200 == 0:
-                logging.info(f"[MarketCap] {done}/{total} checked, {len(passed)} passed so far")
+    batches = [symbols[i:i+batch_size] for i in range(0, len(symbols), batch_size)]
+    done    = 0
+
+    for batch_idx, batch in enumerate(batches):
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(_fetch_market_cap_single, sym, min_cap): sym for sym in batch}
+            for future in as_completed(futures):
+                done += 1
+                result = future.result()
+                if result:
+                    passed.append(result)
+
+        if done % 300 == 0 or batch_idx % 10 == 0:
+            logging.info(f"[MarketCap] {done}/{total} checked, {len(passed)} passed so far")
+
+        if batch_idx < len(batches) - 1:
+            time.sleep(batch_delay)
 
     logging.info(f"[MarketCap] {len(passed)}/{total} symbols passed filter")
     return passed
