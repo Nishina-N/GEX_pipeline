@@ -48,6 +48,7 @@
 
   "r2": {
     "oi_cache_prefix": "gex/oi_cache",
-    "cache_retention_days": 7
+    "cache_retention_days": 7,
+    "mktcap_cache_days": 7
   }
 }

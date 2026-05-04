@@ -157,8 +157,69 @@ def _fetch_market_cap_single(symbol: str, min_cap: int) -> str | None:
         return None
 
 
-def filter_by_market_cap(symbols: list[str], config: dict) -> list[str]:
-    """$2B以上の銘柄に絞り込む（バッチ並列 — Crumb無効化を防ぐため低並列）"""
+def load_mktcap_cache_from_r2(s3_client, config: dict) -> list[str] | None:
+    """R2から時価総額フィルタ済み銘柄リストを取得。7日以内なら有効。"""
+    key    = "gex/mktcap_cache/latest.json"
+    bucket = os.environ["R2_BUCKET_NAME"]
+    max_age_days = config["r2"].get("mktcap_cache_days", 7)
+    try:
+        resp = s3_client.get_object(Bucket=bucket, Key=key)
+        data = json.loads(resp["Body"].read().decode("utf-8"))
+        generated_at = datetime.fromisoformat(data["generated_at"])
+        age_days = (datetime.utcnow() - generated_at).days
+        if age_days <= max_age_days:
+            logging.info(f"[MarketCap] Using R2 cache ({age_days}d old, {len(data['symbols'])} symbols)")
+            return data["symbols"]
+        logging.info(f"[MarketCap] R2 cache is {age_days}d old (> {max_age_days}d). Refreshing.")
+        return None
+    except ClientError as e:
+        if e.response["Error"]["Code"] in ("NoSuchKey", "404"):
+            logging.info("[MarketCap] No R2 cache found. Will fetch fresh.")
+        else:
+            logging.warning(f"[MarketCap] R2 cache load failed: {e}")
+        return None
+    except Exception as e:
+        logging.warning(f"[MarketCap] R2 cache load error: {e}")
+        return None
+
+
+def save_mktcap_cache_to_r2(symbols: list[str], s3_client, dry_run: bool = False) -> None:
+    """時価総額フィルタ済み銘柄リストをR2に保存。"""
+    key    = "gex/mktcap_cache/latest.json"
+    bucket = os.environ["R2_BUCKET_NAME"]
+    data   = {
+        "generated_at": datetime.utcnow().isoformat(),
+        "symbol_count": len(symbols),
+        "symbols":      symbols,
+    }
+    if dry_run:
+        logging.info(f"[MarketCap][DRY RUN] Would save mktcap cache: {len(symbols)} symbols")
+        return
+    try:
+        s3_client.put_object(
+            Bucket=bucket, Key=key,
+            Body=json.dumps(data, ensure_ascii=False).encode("utf-8"),
+            ContentType="application/json",
+        )
+        logging.info(f"[MarketCap] Saved mktcap cache to R2: {len(symbols)} symbols")
+    except Exception as e:
+        logging.warning(f"[MarketCap] R2 mktcap cache save failed: {e}")
+
+
+def filter_by_market_cap(symbols: list[str], config: dict,
+                         s3_client=None, dry_run: bool = False) -> list[str]:
+    """$2B以上の銘柄に絞り込む。R2週次キャッシュがあればAPIを叩かない。"""
+    # ── キャッシュ確認 ──────────────────────────────────────────────
+    if s3_client and not dry_run:
+        cached = load_mktcap_cache_from_r2(s3_client, config)
+        if cached is not None:
+            # キャッシュにない銘柄はフィルタ済みとみなしてスキップ
+            cached_set = set(cached)
+            result = [s for s in symbols if s in cached_set]
+            logging.info(f"[MarketCap] {len(result)}/{len(symbols)} symbols in cache")
+            return result
+
+    # ── キャッシュなし → API フェッチ ──────────────────────────────
     min_cap     = config["market_cap"]["min_market_cap"]
     workers     = config["performance"]["market_cap_workers"]
     batch_size  = config["performance"].get("market_cap_batch_size", 30)
@@ -166,7 +227,7 @@ def filter_by_market_cap(symbols: list[str], config: dict) -> list[str]:
     passed      = []
     total       = len(symbols)
 
-    logging.info(f"[MarketCap] Filtering {total} symbols (min ${min_cap/1e9:.1f}B, {workers} workers, batch={batch_size})...")
+    logging.info(f"[MarketCap] Fetching fresh (min ${min_cap/1e9:.1f}B, {workers} workers, batch={batch_size})...")
 
     batches = [symbols[i:i+batch_size] for i in range(0, len(symbols), batch_size)]
     done    = 0
@@ -180,13 +241,18 @@ def filter_by_market_cap(symbols: list[str], config: dict) -> list[str]:
                 if result:
                     passed.append(result)
 
-        if done % 300 == 0 or batch_idx % 10 == 0:
+        if batch_idx % 10 == 0:
             logging.info(f"[MarketCap] {done}/{total} checked, {len(passed)} passed so far")
 
         if batch_idx < len(batches) - 1:
             time.sleep(batch_delay)
 
     logging.info(f"[MarketCap] {len(passed)}/{total} symbols passed filter")
+
+    # フェッチ結果をR2に保存（週次キャッシュ）
+    if s3_client:
+        save_mktcap_cache_to_r2(passed, s3_client, dry_run=dry_run)
+
     return passed
 
 
@@ -539,7 +605,9 @@ def _main_impl(args) -> bool:
     if args.symbols:
         filtered_symbols = all_symbols  # テスト用オーバーライド時はスキップ
     else:
-        filtered_symbols = filter_by_market_cap(all_symbols, config)
+        filtered_symbols = filter_by_market_cap(
+            all_symbols, config, s3_client=r2_client, dry_run=args.dry_run
+        )
 
     # ─── 前日OIキャッシュをR2から取得 ───────────────────────────────
     yesterday_cache = None
