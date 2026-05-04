@@ -52,6 +52,9 @@ jobs:
         timeout-minutes: 30
         continue-on-error: true
 
+      - name: Wait for yfinance rate limit cooldown
+        run: sleep 120
+
       - name: 1. Fetch options data
         run: python scripts/1_fetch_options_data.py --symbols-from data/symbols_oi_surge.json
         timeout-minutes: 15

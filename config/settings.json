@@ -17,8 +17,8 @@
   "gex_retention_days": 30,
   "rate_limit": {
     "delay_between_symbols": 1.5,
-    "max_retries": 3,
-    "backoff_factor": 2
+    "max_retries": 5,
+    "backoff_factor": 3
   },
   "target_symbols": [
     "SPY",
