@@ -87,11 +87,14 @@ def get_target_symbols() -> list[str]:
         return default_symbols
 
 
-def load_gex_data(date_str: str, symbols: list[str]) -> dict[str, dict]:
+def load_gex_data(date_str: str, symbols: list[str], optional: bool = False) -> dict[str, dict]:
     """指定日付の指定銘柄GEXデータを読み込む"""
     data = {}
     day_dir = GEX_DIR / date_str
     if not day_dir.exists():
+        if optional:
+            logging.warning(f"GEX directory not found (skipping): {day_dir}")
+            return {}
         logging.error(f"GEX directory not found: {day_dir}")
         sys.exit(1)
 
@@ -125,14 +128,11 @@ def load_comparison_data(today: str, symbols: list[str]) -> tuple[dict[str, dict
     yesterday_data = None
     
     if prev_day:
-        try:
-            yesterday_data = load_gex_data(prev_day, symbols)
-            if yesterday_data:
-                logging.info(f"Loaded comparison data from {prev_day}")
-            else:
-                logging.warning(f"No data found for previous market day: {prev_day}")
-        except Exception as e:
-            logging.warning(f"Failed to load previous day data: {e}")
+        yesterday_data = load_gex_data(prev_day, symbols, optional=True)
+        if yesterday_data:
+            logging.info(f"Loaded comparison data from {prev_day}")
+        else:
+            logging.info(f"No previous day data available for: {prev_day}")
     
     return today_data, yesterday_data
 
