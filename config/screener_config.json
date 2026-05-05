@@ -34,7 +34,7 @@
 
   "output": {
     "max_symbols": 20,
-    "always_include": ["SPY", "QQQ", "SMH", "DIA", "IWM"]
+    "always_include": ["SPY", "QQQ", "SMH", "DIA", "IWM", "NVDA", "AAPL", "TSLA"]
   },
 
   "performance": {
