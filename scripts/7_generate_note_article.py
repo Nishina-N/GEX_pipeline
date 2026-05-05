@@ -10,13 +10,15 @@ import os
 import sys
 import json
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
 load_dotenv()
 
 import anthropic
+
+from market_calendar import get_previous_market_day
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -28,73 +30,6 @@ CHART_DIR_ROOT = Path("charts")
 OUTPUT_DIR = Path("note-article")
 MODEL = "claude-sonnet-4-6"
 OI_SURGE_TOP_N = 5  # OI急増銘柄は上位5件のみ
-
-
-# ── NYSE 休場日計算 ─────────────────────────────────────────────────────────
-
-def _observed_holiday(year: int, month: int, day: int) -> date:
-    d = date(year, month, day)
-    if d.weekday() == 5:
-        d -= timedelta(days=1)
-    elif d.weekday() == 6:
-        d += timedelta(days=1)
-    return d
-
-
-def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
-    if n > 0:
-        first = date(year, month, 1)
-        offset = (weekday - first.weekday()) % 7
-        return first + timedelta(days=offset + (n - 1) * 7)
-    last = date(year, month + 1, 1) - timedelta(days=1) if month < 12 else date(year, 12, 31)
-    offset = (last.weekday() - weekday) % 7
-    return last - timedelta(days=offset)
-
-
-def _easter(year: int) -> date:
-    a = year % 19
-    b, c = divmod(year, 100)
-    d, e = divmod(b, 4)
-    f = (b + 8) // 25
-    g = (b - f + 1) // 3
-    h = (19 * a + b - d - g + 15) % 30
-    i, k = divmod(c, 4)
-    l = (32 + 2 * e + 2 * i - h - k) % 7
-    m = (a + 11 * h + 22 * l) // 451
-    month = (h + l - 7 * m + 114) // 31
-    day = (h + l - 7 * m + 114) % 31 + 1
-    return date(year, month, day)
-
-
-def _nyse_holidays(year: int) -> set[str]:
-    h = {
-        _observed_holiday(year, 1, 1).isoformat(),
-        _nth_weekday(year, 1, 0, 3).isoformat(),
-        _nth_weekday(year, 2, 0, 3).isoformat(),
-        (_easter(year) - timedelta(days=2)).isoformat(),
-        _nth_weekday(year, 5, 0, -1).isoformat(),
-        _observed_holiday(year, 7, 4).isoformat(),
-        _nth_weekday(year, 9, 0, 1).isoformat(),
-        _nth_weekday(year, 11, 3, 4).isoformat(),
-        _observed_holiday(year, 12, 25).isoformat(),
-    }
-    if year >= 2022:
-        h.add(_observed_holiday(year, 6, 19).isoformat())
-    return h
-
-
-def get_previous_market_day(date_str: str) -> str | None:
-    current = datetime.strptime(date_str, "%Y-%m-%d")
-    for i in range(1, 10):
-        prev = current - timedelta(days=i)
-        if prev.weekday() >= 5:
-            continue
-        prev_str = prev.strftime("%Y-%m-%d")
-        if prev_str in _nyse_holidays(prev.year):
-            continue
-        return prev_str
-    logging.warning(f"Could not find previous market day within 10 days of {date_str}")
-    return None
 
 
 # ── 銘柄リスト取得 ──────────────────────────────────────────────────────────
