@@ -26,41 +26,75 @@ OUTPUT_DIR = Path("note-article")
 MODEL = "claude-sonnet-4-6"
 
 
-def get_previous_market_day(date_str: str) -> str | None:
-    """
-    指定日の前営業日を取得する。
-    土日と主要祝日をスキップ。R2にデータが存在するかは呼び出し元で確認。
-    """
-    current = datetime.strptime(date_str, "%Y-%m-%d")
-    
-    # 米国主要祝日（簡易版）
-    holidays_2026 = {
-        "2026-01-01",  # New Year's Day
-        "2026-01-20",  # MLK Day
-        "2026-02-17",  # Presidents Day
-        "2026-05-25",  # Memorial Day
-        "2026-07-03",  # Independence Day (observed)
-        "2026-09-07",  # Labor Day
-        "2026-11-26",  # Thanksgiving
-        "2026-12-25",  # Christmas
+def _observed_holiday(year: int, month: int, day: int) -> date:
+    """Fixed holiday shifted to nearest weekday (Sat→Fri, Sun→Mon)."""
+    d = date(year, month, day)
+    if d.weekday() == 5:
+        d -= timedelta(days=1)
+    elif d.weekday() == 6:
+        d += timedelta(days=1)
+    return d
+
+
+def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+    """nth occurrence of weekday in month; negative n counts from end (0=Mon … 6=Sun)."""
+    if n > 0:
+        first = date(year, month, 1)
+        offset = (weekday - first.weekday()) % 7
+        return first + timedelta(days=offset + (n - 1) * 7)
+    last = date(year, month + 1, 1) - timedelta(days=1) if month < 12 else date(year, 12, 31)
+    offset = (last.weekday() - weekday) % 7
+    return last - timedelta(days=offset)
+
+
+def _easter(year: int) -> date:
+    """Anonymous Gregorian algorithm for Easter Sunday."""
+    a = year % 19
+    b, c = divmod(year, 100)
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = (h + l - 7 * m + 114) % 31 + 1
+    return date(year, month, day)
+
+
+def _nyse_holidays(year: int) -> set[str]:
+    """Compute NYSE holidays algorithmically for any year."""
+    h = {
+        _observed_holiday(year, 1, 1).isoformat(),        # New Year's Day
+        _nth_weekday(year, 1, 0, 3).isoformat(),          # MLK Day (3rd Mon Jan)
+        _nth_weekday(year, 2, 0, 3).isoformat(),          # Presidents Day (3rd Mon Feb)
+        (_easter(year) - timedelta(days=2)).isoformat(),  # Good Friday
+        _nth_weekday(year, 5, 0, -1).isoformat(),         # Memorial Day (last Mon May)
+        _observed_holiday(year, 7, 4).isoformat(),        # Independence Day
+        _nth_weekday(year, 9, 0, 1).isoformat(),          # Labor Day (1st Mon Sep)
+        _nth_weekday(year, 11, 3, 4).isoformat(),         # Thanksgiving (4th Thu Nov)
+        _observed_holiday(year, 12, 25).isoformat(),      # Christmas
     }
-    
-    # 1日ずつ遡って営業日を探す
-    for i in range(1, 8):  # 最大7日遡る
-        prev_date = current - timedelta(days=i)
-        prev_str = prev_date.strftime("%Y-%m-%d")
-        
-        # 土日をスキップ
-        if prev_date.weekday() >= 5:  # 5=土, 6=日
+    if year >= 2022:
+        h.add(_observed_holiday(year, 6, 19).isoformat())  # Juneteenth
+    return h
+
+
+def get_previous_market_day(date_str: str) -> str | None:
+    """Return the previous NYSE trading day, skipping weekends and holidays."""
+    current = datetime.strptime(date_str, "%Y-%m-%d")
+
+    for i in range(1, 10):
+        prev = current - timedelta(days=i)
+        if prev.weekday() >= 5:
             continue
-            
-        # 祝日をスキップ
-        if prev_str in holidays_2026:
+        prev_str = prev.strftime("%Y-%m-%d")
+        if prev_str in _nyse_holidays(prev.year):
             continue
-            
         return prev_str
-    
-    logging.warning(f"Could not find previous market day within 7 days of {date_str}")
+
+    logging.warning(f"Could not find previous market day within 10 days of {date_str}")
     return None
 
 
@@ -87,11 +121,14 @@ def get_target_symbols() -> list[str]:
         return default_symbols
 
 
-def load_gex_data(date_str: str, symbols: list[str]) -> dict[str, dict]:
-    """指定日付の指定銘柄GEXデータを読み込む"""
+def load_gex_data(date_str: str, symbols: list[str], optional: bool = False) -> dict[str, dict]:
+    """指定日付の指定銘柄GEXデータを読み込む。optional=True なら欠損時に {} を返す。"""
     data = {}
     day_dir = GEX_DIR / date_str
     if not day_dir.exists():
+        if optional:
+            logging.warning(f"GEX directory not found (optional): {day_dir}")
+            return {}
         logging.error(f"GEX directory not found: {day_dir}")
         sys.exit(1)
 
@@ -125,14 +162,11 @@ def load_comparison_data(today: str, symbols: list[str]) -> tuple[dict[str, dict
     yesterday_data = None
     
     if prev_day:
-        try:
-            yesterday_data = load_gex_data(prev_day, symbols)
-            if yesterday_data:
-                logging.info(f"Loaded comparison data from {prev_day}")
-            else:
-                logging.warning(f"No data found for previous market day: {prev_day}")
-        except Exception as e:
-            logging.warning(f"Failed to load previous day data: {e}")
+        yesterday_data = load_gex_data(prev_day, symbols, optional=True)
+        if yesterday_data:
+            logging.info(f"Loaded comparison data from {prev_day}")
+        else:
+            logging.warning(f"No data found for previous market day: {prev_day}")
     
     return today_data, yesterday_data
 
