@@ -176,9 +176,9 @@ def load_comparison_data(today: str, symbols: list[str]) -> tuple[dict[str, dict
 
 def build_symbol_summary(symbol: str, d: dict) -> str:
     """1銘柄分のデータサマリーテキストを構築"""
-    levels = d.get("levels", {})
-    st = levels.get("short_term", {})
-    lt = levels.get("long_term", {})
+    levels = d.get("levels") or {}
+    st = levels.get("short_term") or {}
+    lt = levels.get("long_term") or {}
 
     def fmt(v):
         return f"{v:.2f}" if v else "N/A"
