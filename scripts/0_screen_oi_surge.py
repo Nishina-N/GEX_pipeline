@@ -45,7 +45,7 @@ logging.basicConfig(
 
 SCREENER_CONFIG_PATH = Path("config/screener_config.json")
 OUTPUT_PATH          = Path("data/symbols_oi_surge.json")
-DEFAULT_SYMBOLS      = ["SPY", "QQQ", "SMH", "DIA", "IWM", "NVDA", "AAPL", "TSLA"]
+DEFAULT_SYMBOLS      = ["SPY", "QQQ", "SMH", "IWM", "NVDA"]
 
 
 # ─── 設定読み込み ─────────────────────────────────────────────────────────
