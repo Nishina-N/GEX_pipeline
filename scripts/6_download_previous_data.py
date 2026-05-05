@@ -14,55 +14,20 @@ import os
 import sys
 import json
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date
 from pathlib import Path
 
 import boto3
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 
+from market_calendar import get_previous_market_day
+
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 GEX_DIR = Path("data/r2/gex/daily")
-
-
-def get_previous_market_day(date_str: str) -> str | None:
-    """
-    指定日の前営業日を取得する（7_generate_note_article.py と同一ロジック）。
-    """
-    current = datetime.strptime(date_str, "%Y-%m-%d")
-    
-    # 米国主要祝日（簡易版）
-    holidays_2026 = {
-        "2026-01-01",  # New Year's Day
-        "2026-01-20",  # MLK Day
-        "2026-02-17",  # Presidents Day
-        "2026-05-25",  # Memorial Day
-        "2026-07-03",  # Independence Day (observed)
-        "2026-09-07",  # Labor Day
-        "2026-11-26",  # Thanksgiving
-        "2026-12-25",  # Christmas
-    }
-    
-    # 1日ずつ遡って営業日を探す
-    for i in range(1, 8):  # 最大7日遡る
-        prev_date = current - timedelta(days=i)
-        prev_str = prev_date.strftime("%Y-%m-%d")
-        
-        # 土日をスキップ
-        if prev_date.weekday() >= 5:  # 5=土, 6=日
-            continue
-            
-        # 祝日をスキップ
-        if prev_str in holidays_2026:
-            continue
-            
-        return prev_str
-    
-    logging.warning(f"Could not find previous market day within 7 days of {date_str}")
-    return None
 
 
 def create_r2_client():
