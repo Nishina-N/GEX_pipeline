@@ -25,6 +25,9 @@ CHART_DIR_ROOT = Path("charts")
 OUTPUT_DIR = Path("note-article")
 MODEL = "claude-sonnet-4-6"
 
+# 前日比較を行うコア銘柄（常時データが存在する銘柄のみ）
+CORE_SYMBOLS_FOR_COMPARISON = ['SPY', 'QQQ', 'SMH', 'IWM', 'NVDA']
+
 
 def _observed_holiday(year: int, month: int, day: int) -> date:
     """Fixed holiday shifted to nearest weekday (Sat→Fri, Sun→Mon)."""
@@ -197,7 +200,7 @@ def build_symbol_summary(symbol: str, d: dict) -> str:
         f"  HVL: {fmt(levels.get('hvl'))}",
         f"  Call Wall: {fmt(levels.get('callWall'))}",
         f"  Put Wall: {fmt(levels.get('putWall'))}",
-        f"  Transition Zone: {fmt(levels.get('transition_zone', {}).get('lower'))} - {fmt(levels.get('transition_zone', {}).get('upper'))}",
+        f"  Transition Zone: {fmt((levels.get('transition_zone') or {}).get('lower'))} - {fmt((levels.get('transition_zone') or {}).get('upper'))}",
         f"",
         f"[短期 DTE0-7 | {', '.join(st_exps) if st_exps else 'N/A'}]",
         f"  HVL: {fmt(st.get('hvl'))}",
@@ -258,9 +261,13 @@ def build_comparison_summary(symbol: str, today_data: dict, yesterday_data: dict
 def build_prompt(date_str: str, gex_data: dict[str, dict], yesterday_data: dict[str, dict] | None, chart_dir: str) -> str:
     symbols = list(gex_data.keys())
     
-    # 当日データサマリー（前日比較含む）
+    # 当日データサマリー（前日比較はCORE_SYMBOLS_FOR_COMPARISONのみ）
     summaries = "\n\n".join(
-        build_comparison_summary(sym, gex_data[sym], yesterday_data)
+        build_comparison_summary(
+            sym,
+            gex_data[sym],
+            yesterday_data if sym in CORE_SYMBOLS_FOR_COMPARISON else None,
+        )
         for sym in symbols
         if sym in gex_data
     )
