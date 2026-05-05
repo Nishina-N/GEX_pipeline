@@ -48,7 +48,8 @@ def get_oi_surge_symbols(core_symbols: list[str], top_n: int = OI_SURGE_TOP_N) -
     try:
         with open(symbols_file, encoding="utf-8") as f:
             data = json.load(f)
-        all_symbols = data.get("symbols", [])
+        results = data.get("screening_results", [])
+        all_symbols = [r["symbol"] for r in results]
         surge = [s for s in all_symbols if s not in core_symbols][:top_n]
         logging.info(f"OI surge symbols (top {top_n}): {surge}")
         return surge
