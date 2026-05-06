@@ -30,6 +30,7 @@ CHART_DIR_ROOT = Path("charts")
 OUTPUT_DIR = Path("note-article")
 MODEL = "claude-sonnet-4-6"
 OI_SURGE_TOP_N = 5  # OI急増銘柄は上位5件のみ
+GUIDELINE_PATH = Path(__file__).parent.parent / "GEX_CLAUDE_GUIDELINE.md"
 
 
 # ── 銘柄リスト取得 ──────────────────────────────────────────────────────────
@@ -304,15 +305,30 @@ def build_prompt(
 
 # ── API呼び出し ──────────────────────────────────────────────────────────────
 
+def load_guideline() -> str:
+    """GEX_CLAUDE_GUIDELINE.md を読み込んでシステムプロンプトとして返す。"""
+    if GUIDELINE_PATH.exists():
+        guideline = GUIDELINE_PATH.read_text(encoding="utf-8")
+        logging.info(f"Loaded GEX guideline ({len(guideline)} chars)")
+        return guideline
+    logging.warning(f"GEX_CLAUDE_GUIDELINE.md not found at {GUIDELINE_PATH}, proceeding without it")
+    return ""
+
+
 def generate_article(prompt: str) -> dict:
     client = anthropic.Anthropic()
+    guideline = load_guideline()
 
     logging.info(f"Calling Claude API ({MODEL})...")
-    message = client.messages.create(
+    create_kwargs = dict(
         model=MODEL,
-        max_tokens=6000,
+        max_tokens=8000,
         messages=[{"role": "user", "content": prompt}]
     )
+    if guideline:
+        create_kwargs["system"] = guideline
+
+    message = client.messages.create(**create_kwargs)
 
     raw = message.content[0].text.strip()
 
