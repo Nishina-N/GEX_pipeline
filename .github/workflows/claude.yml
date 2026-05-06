@@ -42,10 +42,12 @@ jobs:
 
           # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
           # prompt: 'Update the pull request description to include a summary of changes.'
-          prompt: '最初の返答は課題の調査とプランニングのみにして、必ずユーザーからコメントでコード変更許可をもらってから実装に移るようにしてください。'
+          # prompt: '最初の返答は課題の調査とプランニングのみにして、必ずユーザーからコメントでコード変更許可をもらってから実装に移るようにしてください。'
 
           # Optional: Add claude_args to customize behavior and configuration
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
           # claude_args: '--allowed-tools Bash(gh pr *)'
+          claude_args: | # プロンプト
+            --system-prompt "最初の返答は課題の調査とプランニングのみにして、必ずユーザーからコメントでコード変更許可をもらってから実装に移るようにしてください。"
 
