@@ -1,0 +1,129 @@
+name: Daily GEX Update (No R2 Upload)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: gex-pipeline-no-r2-upload
+  cancel-in-progress: false  # 実行中のRunは中断しない（完了を待つ）
+
+permissions:
+  contents: write   # charts を GitHub にコミット・プッシュするために必要
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # push のために全履歴が必要
+        timeout-minutes: 5
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+        timeout-minutes: 10
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+        timeout-minutes: 10
+
+      - name: Create data directories
+        run: mkdir -p data/options data/gex data/levels data/iv_history data/charts
+
+      - name: 0. Screen OI surge
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: python scripts/0_screen_oi_surge.py
+        timeout-minutes: 30
+        continue-on-error: true
+
+      - name: Wait for yfinance rate limit cooldown
+        run: sleep 120
+
+      - name: 1. Fetch options data
+        run: python scripts/1_fetch_options_data.py --symbols-from data/symbols_oi_surge.json
+        timeout-minutes: 15
+
+      - name: 2. Calculate GEX
+        run: python scripts/2_calculate_gex.py
+        timeout-minutes: 5
+
+      - name: 3. Extract GEX levels
+        run: python scripts/3_extract_levels.py
+        timeout-minutes: 5
+
+      - name: 4. Export to JSON
+        run: python scripts/4_export_to_json.py
+        timeout-minutes: 5
+
+      - name: 6. Download previous day data from R2
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: python scripts/6_download_previous_data.py
+        continue-on-error: true
+        timeout-minutes: 5
+
+      - name: 6. Visualize GEX
+        run: python scripts/visualize_gex.py
+        timeout-minutes: 5
+
+      - name: 7. Commit charts to GitHub
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          mkdir -p charts/$DATE
+          cp data/charts/*.png charts/$DATE/ 2>/dev/null || true
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git stash --include-untracked
+          git pull --rebase
+          git stash pop || true
+          git add charts/$DATE/
+          git diff --staged --quiet || git commit -m "chore: GEX charts $DATE"
+          git push
+        timeout-minutes: 5
+
+      - name: 7. Generate note.com article
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          mkdir -p note-article
+          python scripts/7_generate_note_article.py
+        timeout-minutes: 5
+
+      - name: 8. Post GEX report to note.com
+        env:
+          NOTE_SESSION_COOKIE: ${{ secrets.NOTE_SESSION_COOKIE }}
+        run: |
+          npm ci
+          node scripts/8_post_note.mjs
+        timeout-minutes: 5
+
+      - name: Cleanup temporary data
+        if: always()
+        run: rm -rf data/options data/gex data/levels data/iv_history data/r2 data/charts data/symbols_oi_surge.json note-article
+
+      - name: Upload logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gex-pipeline-logs-${{ github.run_id }}
+          path: |
+            *.log
+          retention-days: 7
