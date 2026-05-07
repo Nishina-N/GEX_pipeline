@@ -49,9 +49,12 @@ def get_oi_surge_symbols(core_symbols: list[str], top_n: int = OI_SURGE_TOP_N) -
     try:
         with open(symbols_file, encoding="utf-8") as f:
             data = json.load(f)
-        results = data.get("screening_results", [])
-        all_symbols = [r["symbol"] for r in results]
+        # gamma フィルタ適用済みの symbols リストを参照（positive_gamma 銘柄のみ）
+        all_symbols = data.get("symbols", [])
         surge = [s for s in all_symbols if s not in core_symbols][:top_n]
+        if data.get("gamma_filter_applied"):
+            removed = data.get("gamma_filter_removed", [])
+            logging.info(f"Gamma filter was applied. Removed symbols: {removed}")
         logging.info(f"OI surge symbols (top {top_n}): {surge}")
         return surge
     except Exception as e:
