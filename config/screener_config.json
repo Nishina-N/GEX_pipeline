@@ -51,5 +51,11 @@
     "oi_cache_prefix": "gex/oi_cache",
     "cache_retention_days": 7,
     "mktcap_cache_days": 7
+  },
+
+  "gamma_filter": {
+    "enabled": true,
+    "apply_to_always_include": false,
+    "no_data_behavior": "exclude"
   }
 }

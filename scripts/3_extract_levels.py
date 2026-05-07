@@ -33,6 +33,8 @@ DATA_FOLDER = "data"
 GEX_DIR = os.path.join(DATA_FOLDER, "gex")
 LEVELS_DIR = os.path.join(DATA_FOLDER, "levels")
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "settings.json")
+SCREENER_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "screener_config.json")
+OI_SURGE_FILE = os.path.join(DATA_FOLDER, "symbols_oi_surge.json")
 
 
 def load_config():
@@ -315,6 +317,116 @@ def extract_levels_for_symbol(gex_data, config):
     return result
 
 
+def filter_oi_surge_by_gamma() -> None:
+    """
+    data/symbols_oi_surge.json の各銘柄について
+    data/levels/{symbol}.json の sentiment を確認し、
+    positive_gamma の銘柄のみに絞り込んで上書き保存する。
+
+    - always_include 銘柄（SPY, QQQ 等）は gamma フィルタをスキップ（設定で変更可能）
+    - GEX データなしの銘柄は no_data_behavior に従い除外 or 保持
+    - screening_results の各エントリに gamma_sentiment フィールドを追加
+    """
+    # screener_config.json を読み込む
+    try:
+        with open(SCREENER_CONFIG_PATH, 'r') as f:
+            screener_cfg = json.load(f)
+    except Exception as e:
+        logging.error(f"[GammaFilter] screener_config.json の読み込みに失敗: {e}")
+        return
+
+    gamma_filter_cfg = screener_cfg.get("gamma_filter", {})
+    if not gamma_filter_cfg.get("enabled", True):
+        logging.info("[GammaFilter] gamma_filter が無効化されています。スキップします。")
+        return
+
+    always_include = screener_cfg.get("output", {}).get("always_include", [])
+    apply_to_always_include = gamma_filter_cfg.get("apply_to_always_include", False)
+    no_data_behavior = gamma_filter_cfg.get("no_data_behavior", "exclude")  # "exclude" or "include"
+
+    # symbols_oi_surge.json を読み込む
+    if not os.path.exists(OI_SURGE_FILE):
+        logging.warning(f"[GammaFilter] {OI_SURGE_FILE} が見つかりません。スキップします。")
+        return
+
+    try:
+        with open(OI_SURGE_FILE, 'r') as f:
+            surge_data = json.load(f)
+    except Exception as e:
+        logging.error(f"[GammaFilter] {OI_SURGE_FILE} の読み込みに失敗: {e}")
+        return
+
+    original_symbols = surge_data.get("symbols", [])
+    results = surge_data.get("screening_results", [])
+
+    filtered_symbols = []
+    removed_symbols = []
+
+    for entry in results:
+        symbol = entry.get("symbol")
+        if symbol is None:
+            continue
+
+        # always_include かつ apply_to_always_include=False の場合はフィルタをスキップ
+        skip_filter = (symbol in always_include and not apply_to_always_include)
+
+        # data/levels/{symbol}.json から sentiment を取得
+        level_path = os.path.join(LEVELS_DIR, f"{symbol}.json")
+        gamma_sentiment = None
+        if os.path.exists(level_path):
+            try:
+                with open(level_path, 'r') as f:
+                    level_data = json.load(f)
+                gamma_sentiment = level_data.get("sentiment")
+            except Exception as e:
+                logging.warning(f"[GammaFilter] [{symbol}] levels JSON の読み込みに失敗: {e}")
+
+        # screening_results エントリに gamma_sentiment を追加（可視性・監査用）
+        entry["gamma_sentiment"] = gamma_sentiment
+
+        # symbols リストに含まれていない銘柄は判定対象外
+        if symbol not in original_symbols:
+            continue
+
+        if skip_filter:
+            filtered_symbols.append(symbol)
+            logging.info(
+                f"[GammaFilter] [{symbol}] always_include のためフィルタをスキップ"
+                f"（gamma: {gamma_sentiment}）"
+            )
+        elif gamma_sentiment == 'positive_gamma':
+            filtered_symbols.append(symbol)
+            logging.info(f"[GammaFilter] [{symbol}] positive_gamma → 保持")
+        elif gamma_sentiment is None:
+            # GEX データなし → no_data_behavior に従う
+            if no_data_behavior == "include":
+                filtered_symbols.append(symbol)
+                logging.info(f"[GammaFilter] [{symbol}] GEX データなし → 保持（no_data_behavior=include）")
+            else:
+                removed_symbols.append(symbol)
+                logging.info(f"[GammaFilter] [{symbol}] GEX データなし → 除外（no_data_behavior=exclude）")
+        else:
+            removed_symbols.append(symbol)
+            logging.info(f"[GammaFilter] [{symbol}] {gamma_sentiment} → 除外")
+
+    # 元の順序を維持しながらフィルタ済みリストを再構築
+    filtered_symbols_ordered = [s for s in original_symbols if s in filtered_symbols]
+
+    surge_data["symbols"] = filtered_symbols_ordered
+    surge_data["gamma_filter_applied"] = True
+    surge_data["gamma_filter_removed"] = removed_symbols
+
+    try:
+        with open(OI_SURGE_FILE, 'w') as f:
+            json.dump(surge_data, f, indent=2, ensure_ascii=False)
+        logging.info(
+            f"[GammaFilter] 完了: {len(filtered_symbols_ordered)} 銘柄保持 / "
+            f"{len(removed_symbols)} 銘柄除外: {removed_symbols}"
+        )
+    except Exception as e:
+        logging.error(f"[GammaFilter] {OI_SURGE_FILE} の保存に失敗: {e}")
+
+
 def main():
     config = load_config()
     os.makedirs(LEVELS_DIR, exist_ok=True)
@@ -360,6 +472,9 @@ def main():
     logging.info("=" * 60)
     logging.info(f"Success: {success_count}, Failed: {fail_count}")
     logging.info("=" * 60)
+
+    # gamma フィルタ: symbols_oi_surge.json を positive_gamma 銘柄のみに絞り込む
+    filter_oi_surge_by_gamma()
 
     return success_count > 0
 
