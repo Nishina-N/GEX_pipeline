@@ -36,6 +36,8 @@ import boto3
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 
+from market_calendar import get_previous_market_day
+
 load_dotenv()
 
 logging.basicConfig(
@@ -574,7 +576,11 @@ def write_output(symbols: list[str], ranked: list[dict], date_str: str) -> None:
 def _main_impl(args) -> bool:
     config   = load_screener_config()
     date_str = args.date or datetime.now().strftime("%Y-%m-%d")
-    yesterday_str = (datetime.strptime(date_str, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+    # 前営業日を取得（月曜日の場合は金曜日、祝日も考慮）
+    yesterday_str = get_previous_market_day(date_str)
+    if yesterday_str is None:
+        logging.warning("[Screener] Could not determine previous market day. Using calendar day -1 as fallback.")
+        yesterday_str = (datetime.strptime(date_str, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
 
     # R2クライアント（dry-run時はR2操作を全てスキップ）
     r2_client = None

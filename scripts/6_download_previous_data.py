@@ -29,6 +29,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 GEX_DIR = Path("data/r2/gex/daily")
 
+# コア銘柄は常にダウンロードを保証する（設定変更時のサイレント障害を防ぐ）
+CORE_SYMBOLS = ['SPY', 'QQQ', 'SMH', 'IWM', 'NVDA']
+
 
 def create_r2_client():
     """R2 S3互換クライアントを作成"""
@@ -43,25 +46,40 @@ def create_r2_client():
 
 def get_target_symbols() -> list[str]:
     """
-    symbols_oi_surge.json から動的に銘柄リストを取得。
+    symbols_oi_surge.json から動的に銘柄リストを取得し、
+    CORE_SYMBOLS を必ず含める（設定変更時のサイレント障害を防ぐ）。
     ファイルが存在しない場合はデフォルト銘柄を返す。
     """
     symbols_file = Path("data/symbols_oi_surge.json")
     default_symbols = ["SPY", "QQQ", "SMH", "DIA", "IWM", "NVDA", "AAPL", "TSLA"]
-    
+
     if not symbols_file.exists():
         logging.warning(f"Symbols file not found: {symbols_file}. Using defaults.")
-        return default_symbols
-    
+        # CORE_SYMBOLS を先頭に置き、デフォルトに含まれていないものをマージ
+        merged = list(CORE_SYMBOLS)
+        for s in default_symbols:
+            if s not in merged:
+                merged.append(s)
+        return merged
+
     try:
         with open(symbols_file, encoding="utf-8") as f:
             data = json.load(f)
-        symbols = data.get("symbols", default_symbols)
-        logging.info(f"Target symbols: {symbols}")
-        return symbols
+        raw_symbols = data.get("symbols", default_symbols)
+        # CORE_SYMBOLS を先頭に確保し、残りを続ける
+        merged = list(CORE_SYMBOLS)
+        for s in raw_symbols:
+            if s not in merged:
+                merged.append(s)
+        logging.info(f"Target symbols ({len(merged)} total, CORE={CORE_SYMBOLS}): {merged}")
+        return merged
     except Exception as e:
-        logging.warning(f"Error loading symbols file: {e}. Using defaults.")
-        return default_symbols
+        logging.warning(f"Error loading symbols file: {e}. Using defaults with CORE_SYMBOLS.")
+        merged = list(CORE_SYMBOLS)
+        for s in default_symbols:
+            if s not in merged:
+                merged.append(s)
+        return merged
 
 
 def download_gex_from_r2(date_str: str, symbols: list[str], s3_client) -> bool:
