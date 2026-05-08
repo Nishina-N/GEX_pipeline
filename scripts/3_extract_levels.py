@@ -261,12 +261,41 @@ def extract_levels_for_symbol(gex_data, config):
             ],
         }
 
+    # ── GEX有効性・組み合わせ分類 ────────────────────────────────
+    abs_total_gex = abs(float(total_gex))
+    if abs_total_gex >= 1_000_000_000:
+        gex_applicable = "high"
+    elif abs_total_gex >= 200_000_000:
+        gex_applicable = "moderate"
+    elif abs_total_gex >= 50_000_000:
+        gex_applicable = "low"
+    else:
+        gex_applicable = "insufficient"
+
+    # totalGEXの符号 × sentimentで1〜4に分類
+    # 1: +totalGEX × positive_gamma (安定レンジ)
+    # 2: -totalGEX × positive_gamma (混合)
+    # 3: +totalGEX × negative_gamma (急騰候補 HVL回復型)
+    # 4: -totalGEX × negative_gamma (最強急騰・急落候補)
+    total_gex_positive = float(total_gex) >= 0
+    sentiment_positive = levels_total['sentiment'] == 'positive_gamma'
+    if total_gex_positive and sentiment_positive:
+        gex_combination = 1
+    elif not total_gex_positive and sentiment_positive:
+        gex_combination = 2
+    elif total_gex_positive and not sentiment_positive:
+        gex_combination = 3
+    else:
+        gex_combination = 4
+
     result = {
         'ticker': symbol,
         'date': date,
         'spotPrice': float(spot),
         'totalGEX': float(total_gex),
         'sentiment': levels_total['sentiment'],
+        'gex_applicable': gex_applicable,
+        'gex_combination': gex_combination,
         'levels': {
             # 全満期合算
             'hvl': levels_total['hvl'],
@@ -320,12 +349,23 @@ def extract_levels_for_symbol(gex_data, config):
 def filter_oi_surge_by_gamma() -> None:
     """
     data/symbols_oi_surge.json の各銘柄について
-    data/levels/{symbol}.json の sentiment を確認し、
-    positive_gamma の銘柄のみに絞り込んで上書き保存する。
+    data/levels/{symbol}.json の GEX 情報を確認し、急騰不適切な銘柄を除外する。
+
+    【ブラックリスト方式】
+    sentimentで絞り込むのではなく、以下の「除外条件」に該当する銘柄のみを除外する:
+      1. GEX不十分: |totalGEX| < min_total_gex_usd（GEX分析自体が無効）
+      2. ブレイクダウン局面: spot < put_wall（急落方向の銘柄は除外）
+    これにより negative_gamma（パターンA: プレブレイクアウト）も
+    positive_gamma（パターンB: ブレイクアウト後モメンタム）も両方保持できる。
+
+    出力フィールド追加:
+      - gamma_sentiment  : sentiment の値
+      - surge_pattern    : "pre_breakout"（negative_gamma）or
+                           "breakout_momentum"（positive_gamma）or None
+      - gex_applicable   : "high" / "moderate" / "low" / "insufficient"
 
     - always_include 銘柄（SPY, QQQ 等）は gamma フィルタをスキップ（設定で変更可能）
     - GEX データなしの銘柄は no_data_behavior に従い除外 or 保持
-    - screening_results の各エントリに gamma_sentiment フィールドを追加
     """
     # screener_config.json を読み込む
     try:
@@ -343,6 +383,8 @@ def filter_oi_surge_by_gamma() -> None:
     always_include = screener_cfg.get("output", {}).get("always_include", [])
     apply_to_always_include = gamma_filter_cfg.get("apply_to_always_include", False)
     no_data_behavior = gamma_filter_cfg.get("no_data_behavior", "exclude")  # "exclude" or "include"
+    min_total_gex_usd = gamma_filter_cfg.get("min_total_gex_usd", 50_000_000)
+    exclude_breakdown = gamma_filter_cfg.get("exclude_breakdown", True)
 
     # symbols_oi_surge.json を読み込む
     if not os.path.exists(OI_SURGE_FILE):
@@ -370,19 +412,38 @@ def filter_oi_surge_by_gamma() -> None:
         # always_include かつ apply_to_always_include=False の場合はフィルタをスキップ
         skip_filter = (symbol in always_include and not apply_to_always_include)
 
-        # data/levels/{symbol}.json から sentiment を取得
+        # data/levels/{symbol}.json から GEX 情報を取得
         level_path = os.path.join(LEVELS_DIR, f"{symbol}.json")
         gamma_sentiment = None
+        total_gex = None
+        spot_price = None
+        put_wall = None
+        gex_applicable = None
+
         if os.path.exists(level_path):
             try:
                 with open(level_path, 'r') as f:
                     level_data = json.load(f)
                 gamma_sentiment = level_data.get("sentiment")
+                total_gex = level_data.get("totalGEX")
+                spot_price = level_data.get("spotPrice")
+                put_wall = level_data.get("levels", {}).get("putWall")
+                gex_applicable = level_data.get("gex_applicable")
             except Exception as e:
                 logging.warning(f"[GammaFilter] [{symbol}] levels JSON の読み込みに失敗: {e}")
 
-        # screening_results エントリに gamma_sentiment を追加（可視性・監査用）
+        # surge_pattern の決定
+        if gamma_sentiment == 'negative_gamma':
+            surge_pattern = "pre_breakout"         # HVL下 → ブレイクアウト前夜
+        elif gamma_sentiment == 'positive_gamma':
+            surge_pattern = "breakout_momentum"    # HVL上 → ブレイクアウト後モメンタム
+        else:
+            surge_pattern = None
+
+        # screening_results エントリにフィールドを追加（可視性・監査用）
         entry["gamma_sentiment"] = gamma_sentiment
+        entry["surge_pattern"] = surge_pattern
+        entry["gex_applicable"] = gex_applicable
 
         # symbols リストに含まれていない銘柄は判定対象外
         if symbol not in original_symbols:
@@ -392,22 +453,48 @@ def filter_oi_surge_by_gamma() -> None:
             filtered_symbols.append(symbol)
             logging.info(
                 f"[GammaFilter] [{symbol}] always_include のためフィルタをスキップ"
-                f"（gamma: {gamma_sentiment}）"
+                f"（gamma: {gamma_sentiment}, surge_pattern: {surge_pattern}）"
             )
-        elif gamma_sentiment == 'positive_gamma':
-            filtered_symbols.append(symbol)
-            logging.info(f"[GammaFilter] [{symbol}] positive_gamma → 保持")
-        elif gamma_sentiment is None:
-            # GEX データなし → no_data_behavior に従う
+            continue
+
+        # GEX データなし → no_data_behavior に従う
+        if gamma_sentiment is None:
             if no_data_behavior == "include":
                 filtered_symbols.append(symbol)
                 logging.info(f"[GammaFilter] [{symbol}] GEX データなし → 保持（no_data_behavior=include）")
             else:
                 removed_symbols.append(symbol)
                 logging.info(f"[GammaFilter] [{symbol}] GEX データなし → 除外（no_data_behavior=exclude）")
-        else:
+            continue
+
+        # ── ブラックリスト方式の除外判定 ──────────────────────────
+        exclude = False
+        exclude_reason = ""
+
+        # 除外条件① GEX不十分（分析無効）
+        if total_gex is not None and abs(total_gex) < min_total_gex_usd:
+            exclude = True
+            exclude_reason = (
+                f"GEX insufficient: |{total_gex:.0f}| < {min_total_gex_usd:.0f}"
+            )
+
+        # 除外条件② ブレイクダウン局面（Spot < Put Wall）
+        elif exclude_breakdown and spot_price is not None and put_wall is not None:
+            if spot_price < put_wall:
+                exclude = True
+                exclude_reason = (
+                    f"breakdown: spot({spot_price:.1f}) < putWall({put_wall:.1f})"
+                )
+
+        if exclude:
             removed_symbols.append(symbol)
-            logging.info(f"[GammaFilter] [{symbol}] {gamma_sentiment} → 除外")
+            logging.info(f"[GammaFilter] [{symbol}] 除外 → {exclude_reason}")
+        else:
+            filtered_symbols.append(symbol)
+            logging.info(
+                f"[GammaFilter] [{symbol}] 保持 "
+                f"（surge_pattern: {surge_pattern}, gex_applicable: {gex_applicable}）"
+            )
 
     # 元の順序を維持しながらフィルタ済みリストを再構築
     filtered_symbols_ordered = [s for s in original_symbols if s in filtered_symbols]
