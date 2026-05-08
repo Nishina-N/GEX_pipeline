@@ -412,7 +412,7 @@ def main():
         "core_symbols": core_symbols,
         "oi_surge_symbols": oi_surge_symbols,
         "chart_dir": chart_dir,
-        "has_comparison_data": yesterday_data is not None,
+        "has_comparison_data": bool(yesterday_data),
     }
     meta_path = OUTPUT_DIR / "meta.json"
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
