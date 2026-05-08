@@ -56,6 +56,8 @@
   "gamma_filter": {
     "enabled": true,
     "apply_to_always_include": false,
-    "no_data_behavior": "exclude"
+    "no_data_behavior": "exclude",
+    "min_total_gex_usd": 50000000,
+    "exclude_breakdown": true
   }
 }
