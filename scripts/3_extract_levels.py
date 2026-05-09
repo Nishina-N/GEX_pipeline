@@ -362,6 +362,68 @@ def _write_filter_result_to_levels(symbol: str, passed: bool, reason: str) -> No
         logging.warning(f"[GammaFilter] [{symbol}] levels JSON 更新失敗: {e}")
 
 
+def save_pre_gamma_csv(results: list, surge_data: dict) -> None:
+    """
+    γフィルタ適用前のOI急増銘柄リストをCSVで保存する。
+
+    フィルタ前の全銘柄（screening_results）を対象に、
+    totalGEX を含むカラムで CSV を生成する。
+    後から totalGEX 等でソートできるよう全カラムを含む。
+
+    保存先: charts/{date}/oi_surge_pre_gamma.csv
+    """
+    # 日付の取得（YYYY-MM-DD 形式）
+    date_str = surge_data.get("date")
+    if not date_str:
+        date_str = pd.Timestamp.now().strftime("%Y-%m-%d")
+    else:
+        try:
+            date_str = pd.Timestamp(date_str).strftime("%Y-%m-%d")
+        except Exception:
+            date_str = pd.Timestamp.now().strftime("%Y-%m-%d")
+
+    # 保存先ディレクトリ（ワークフローの charts/$DATE/ と同じパス）
+    charts_dir = os.path.join("charts", date_str)
+    os.makedirs(charts_dir, exist_ok=True)
+
+    rows = []
+    for entry in results:
+        symbol = entry.get("symbol")
+        if symbol is None:
+            continue
+        rows.append({
+            "symbol":              symbol,
+            "spot_price":          entry.get("spot_price"),
+            "bullish_score":       entry.get("bullish_score"),
+            "call_oi_change_pct":  entry.get("call_oi_change_pct"),
+            "total_oi_change_pct": entry.get("total_oi_change_pct"),
+            "total_oi":            entry.get("total_oi"),
+            "call_oi":             entry.get("call_oi"),
+            "put_oi":              entry.get("put_oi"),
+            "pcr":                 entry.get("pcr"),
+            "otm_call_ratio":      entry.get("otm_call_ratio"),
+            "totalGEX":            entry.get("totalGEX"),
+            "gamma_sentiment":     entry.get("gamma_sentiment"),
+            "gex_applicable":      entry.get("gex_applicable"),
+            "surge_pattern":       entry.get("surge_pattern"),
+        })
+
+    if not rows:
+        logging.warning("[PreGammaCSV] 保存するデータがありません")
+        return
+
+    df = pd.DataFrame(rows, columns=[
+        "symbol", "spot_price", "bullish_score",
+        "call_oi_change_pct", "total_oi_change_pct",
+        "total_oi", "call_oi", "put_oi", "pcr", "otm_call_ratio",
+        "totalGEX", "gamma_sentiment", "gex_applicable", "surge_pattern",
+    ])
+
+    csv_path = os.path.join(charts_dir, "oi_surge_pre_gamma.csv")
+    df.to_csv(csv_path, index=False)
+    logging.info(f"[PreGammaCSV] {len(rows)} 銘柄 → {csv_path}")
+
+
 def filter_oi_surge_by_gamma() -> None:
     """
     data/symbols_oi_surge.json の各銘柄について
@@ -460,6 +522,7 @@ def filter_oi_surge_by_gamma() -> None:
         entry["gamma_sentiment"] = gamma_sentiment
         entry["surge_pattern"] = surge_pattern
         entry["gex_applicable"] = gex_applicable
+        entry["totalGEX"] = total_gex
 
         # symbols リストに含まれていない銘柄は判定対象外
         if symbol not in original_symbols:
@@ -516,6 +579,9 @@ def filter_oi_surge_by_gamma() -> None:
                 f"（surge_pattern: {surge_pattern}, gex_applicable: {gex_applicable}）"
             )
             _write_filter_result_to_levels(symbol, passed=True, reason="gamma_filter_passed")
+
+    # γフィルタ前の全OI急増銘柄リストをCSVで保存（フィルタ後の除外銘柄も含む）
+    save_pre_gamma_csv(results, surge_data)
 
     # ETF銘柄は OI スクリーニング対象外のため screening_results に含まれず
     # メインループでは処理されない。ここで明示的に自動保持する。
