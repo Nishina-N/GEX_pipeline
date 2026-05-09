@@ -418,16 +418,37 @@ def create_chart(symbol, candle_limit=100):
     # ラベル列（左）と値列（右）を分けて描画
     col_l = 0.46   # ラベル開始 x（axes 座標）
     col_r = col_l + 0.04  # 値開始 x
-    rows  = [0.80, 0.58, 0.36, 0.14]   # 各行の y（axes 座標、上から）
+    rows  = [0.85, 0.68, 0.50, 0.32, 0.14]   # 各行の y（axes 座標、上から）
 
-    labels_col = ['Data', 'GEX', 'HVL', 'Call / Put']
+    # γFilter 状況
+    gamma_filter_passed = gex.get("gamma_filter_passed")
+    gamma_filter_reason = gex.get("gamma_filter_reason", "")
+    if gamma_filter_passed is True:
+        if gamma_filter_reason == "etf_auto_retain":
+            filter_str = "N/A (ETF)"
+            filter_color = GRAY
+        elif gamma_filter_reason == "always_include_skip":
+            filter_str = "N/A (always)"
+            filter_color = GRAY
+        else:
+            filter_str = "Passed"
+            filter_color = GREEN
+    elif gamma_filter_passed is False:
+        filter_str = "Removed"
+        filter_color = CRIMSON
+    else:
+        filter_str = "N/A"
+        filter_color = GRAY
+
+    labels_col = ['Data', 'GEX', 'HVL', 'Call / Put', 'γFilter']
     values_col = [
         data_date,
         f"{gex_str}  ({sent_str})",
         hvl_str,
         f"{call_w_str}  /  {put_w_str}",
+        filter_str,
     ]
-    value_colors = [INK, sent_color, INK, INK]
+    value_colors = [INK, sent_color, INK, INK, filter_color]
 
     for y, lbl, val, vcol in zip(rows, labels_col, values_col, value_colors):
         ax_info.text(col_l, y, lbl, transform=ax_info.transAxes,
@@ -451,6 +472,12 @@ def create_chart(symbol, candle_limit=100):
 # main
 # ─────────────────────────────────────────────────────────────
 
+SCREENER_CONFIG_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "config", "screener_config.json"
+)
+OI_SURGE_CHART_TOP_N = 10   # OI急増銘柄はγ量上位N件のみチャート生成
+
+
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -458,14 +485,48 @@ def main():
         logging.error(f"Levels directory not found: {LEVELS_DIR}")
         return False
 
-    symbols = [f.replace('.json', '') for f in os.listdir(LEVELS_DIR) if f.endswith('.json')]
-    if not symbols:
+    all_json = [f for f in os.listdir(LEVELS_DIR) if f.endswith('.json')]
+    if not all_json:
         logging.error("No level files found")
         return False
 
-    logging.info(f"Creating charts for: {sorted(symbols)}")
+    # screener_config.json から always_include リストを取得
+    always_include = []
+    try:
+        with open(SCREENER_CONFIG_PATH, 'r') as f:
+            screener_cfg = json.load(f)
+        always_include = screener_cfg.get("output", {}).get("always_include", [])
+    except Exception as e:
+        logging.warning(f"screener_config.json の読み込みに失敗（全銘柄をチャート生成）: {e}")
 
-    for symbol in sorted(symbols):
+    # 全銘柄を levels JSON から読み込み
+    all_levels = {}
+    for fname in all_json:
+        symbol = fname.replace('.json', '')
+        path = os.path.join(LEVELS_DIR, fname)
+        try:
+            with open(path, 'r') as f:
+                all_levels[symbol] = json.load(f)
+        except Exception as e:
+            logging.warning(f"[{symbol}] levels JSON 読み込みエラー: {e}")
+
+    # always_include 銘柄は常にチャート生成
+    # OI急増（non always_include）銘柄は |totalGEX| 降順で上位 OI_SURGE_CHART_TOP_N 件のみ
+    oi_surge_symbols = [
+        s for s in all_levels if s not in always_include
+    ]
+    oi_surge_symbols.sort(
+        key=lambda s: abs(all_levels[s].get('totalGEX', 0)),
+        reverse=True
+    )
+    oi_surge_to_chart = oi_surge_symbols[:OI_SURGE_CHART_TOP_N]
+
+    symbols_to_chart = sorted(set(always_include) & set(all_levels)) + sorted(oi_surge_to_chart)
+
+    logging.info(f"Always-include チャート対象: {sorted(set(always_include) & set(all_levels))}")
+    logging.info(f"OI急増 γ量TOP{OI_SURGE_CHART_TOP_N} チャート対象: {sorted(oi_surge_to_chart)}")
+
+    for symbol in symbols_to_chart:
         try:
             create_chart(symbol, candle_limit=100)
         except Exception as e:

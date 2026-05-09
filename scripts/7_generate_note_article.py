@@ -3,7 +3,7 @@
 
 2部構成の記事を生成する:
   Part 1: コア5銘柄（SPY/QQQ/SMH/IWM/NVDA）― 前日比較あり・詳細分析
-  Part 2: OIスクリーニング急増銘柄 TOP5 ― 簡易紹介
+  Part 2: OIスクリーニング急増銘柄 TOP5（γ量上位5件）― 簡易紹介
 """
 
 import os
@@ -35,9 +35,10 @@ GUIDELINE_PATH = Path(__file__).parent.parent / "GEX_CLAUDE_GUIDELINE.md"
 
 # ── 銘柄リスト取得 ──────────────────────────────────────────────────────────
 
-def get_oi_surge_symbols(core_symbols: list[str], top_n: int = OI_SURGE_TOP_N) -> list[str]:
+def get_oi_surge_symbols(core_symbols: list[str]) -> list[str]:
     """
-    symbols_oi_surge.json からコア銘柄を除いた上位 top_n 件を返す。
+    symbols_oi_surge.json からコア銘柄を除いた全銘柄を返す。
+    上位N件への絞り込みは GEX データ読み込み後に |totalGEX| 降順で行う。
     ファイルが存在しない場合は空リストを返す。
     """
     symbols_file = Path("data/symbols_oi_surge.json")
@@ -49,13 +50,13 @@ def get_oi_surge_symbols(core_symbols: list[str], top_n: int = OI_SURGE_TOP_N) -
     try:
         with open(symbols_file, encoding="utf-8") as f:
             data = json.load(f)
-        # gamma フィルタ適用済みの symbols リストを参照（positive_gamma 銘柄のみ）
+        # gamma フィルタ適用済みの symbols リストを参照
         all_symbols = data.get("symbols", [])
-        surge = [s for s in all_symbols if s not in core_symbols][:top_n]
+        surge = [s for s in all_symbols if s not in core_symbols]
         if data.get("gamma_filter_applied"):
             removed = data.get("gamma_filter_removed", [])
             logging.info(f"Gamma filter was applied. Removed symbols: {removed}")
-        logging.info(f"OI surge symbols (top {top_n}): {surge}")
+        logging.info(f"OI surge symbols (all): {surge}")
         return surge
     except Exception as e:
         logging.warning(f"Error loading symbols file: {e}. No OI surge symbols.")
@@ -358,9 +359,9 @@ def main():
 
     # 銘柄リスト決定
     core_symbols = CORE_SYMBOLS
-    oi_surge_symbols = get_oi_surge_symbols(core_symbols, top_n=OI_SURGE_TOP_N)
+    oi_surge_symbols_all = get_oi_surge_symbols(core_symbols)
     logging.info(f"Core symbols: {core_symbols}")
-    logging.info(f"OI surge symbols: {oi_surge_symbols}")
+    logging.info(f"OI surge symbols (all): {oi_surge_symbols_all}")
 
     # 当日GEXデータ読み込み
     core_data = load_gex_data(today, core_symbols)
@@ -370,9 +371,19 @@ def main():
     logging.info(f"Loaded core data for {len(core_data)} symbols")
 
     oi_surge_data: dict[str, dict] = {}
-    if oi_surge_symbols:
-        oi_surge_data = load_gex_data(today, oi_surge_symbols, optional=True)
-        logging.info(f"Loaded OI surge data for {len(oi_surge_data)} symbols")
+    oi_surge_symbols: list[str] = []
+    if oi_surge_symbols_all:
+        oi_surge_data_all = load_gex_data(today, oi_surge_symbols_all, optional=True)
+        # |totalGEX| 降順でソートして上位 OI_SURGE_TOP_N 件を選択
+        oi_surge_data = dict(
+            sorted(
+                oi_surge_data_all.items(),
+                key=lambda x: abs(x[1].get("totalGEX", 0)),
+                reverse=True,
+            )[:OI_SURGE_TOP_N]
+        )
+        oi_surge_symbols = list(oi_surge_data.keys())
+        logging.info(f"Loaded OI surge data for {len(oi_surge_data)} symbols (top {OI_SURGE_TOP_N} by |totalGEX|): {oi_surge_symbols}")
 
     # 前日データ（コア銘柄のみ）
     yesterday_data: dict[str, dict] | None = None
