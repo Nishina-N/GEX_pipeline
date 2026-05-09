@@ -31,13 +31,15 @@ OUTPUT_DIR = Path("note-article")
 MODEL = "claude-sonnet-4-6"
 OI_SURGE_TOP_N = 5  # OI急増銘柄は上位5件のみ
 GUIDELINE_PATH = Path(__file__).parent.parent / "GEX_CLAUDE_GUIDELINE.md"
+SCREENER_CONFIG_PATH = Path("config/screener_config.json")
 
 
 # ── 銘柄リスト取得 ──────────────────────────────────────────────────────────
 
 def get_oi_surge_symbols(core_symbols: list[str]) -> list[str]:
     """
-    symbols_oi_surge.json からコア銘柄を除いた全銘柄を返す。
+    symbols_oi_surge.json からコア銘柄・ETFを除いた全銘柄を返す。
+    ETFリストは screener_config.json の output.etf_symbols から読み込む。
     上位N件への絞り込みは GEX データ読み込み後に |totalGEX| 降順で行う。
     ファイルが存在しない場合は空リストを返す。
     """
@@ -47,12 +49,22 @@ def get_oi_surge_symbols(core_symbols: list[str]) -> list[str]:
         logging.warning(f"Symbols file not found: {symbols_file}. No OI surge symbols.")
         return []
 
+    # screener_config.json から ETF シンボルリストを読み込む
+    etf_symbols: list[str] = []
+    try:
+        with open(SCREENER_CONFIG_PATH, encoding="utf-8") as f:
+            screener_config = json.load(f)
+        etf_symbols = screener_config.get("output", {}).get("etf_symbols", [])
+        logging.info(f"ETF symbols to exclude: {etf_symbols}")
+    except Exception as e:
+        logging.warning(f"Could not load screener config: {e}. ETF symbols not excluded.")
+
     try:
         with open(symbols_file, encoding="utf-8") as f:
             data = json.load(f)
         # gamma フィルタ適用済みの symbols リストを参照
         all_symbols = data.get("symbols", [])
-        surge = [s for s in all_symbols if s not in core_symbols]
+        surge = [s for s in all_symbols if s not in core_symbols and s not in etf_symbols]
         if data.get("gamma_filter_applied"):
             removed = data.get("gamma_filter_removed", [])
             logging.info(f"Gamma filter was applied. Removed symbols: {removed}")
