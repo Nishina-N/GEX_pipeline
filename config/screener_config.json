@@ -33,8 +33,9 @@
   },
 
   "output": {
-    "max_symbols": 20,
-    "always_include": ["SPY", "QQQ", "SMH", "DIA", "IWM", "NVDA", "AAPL", "TSLA"]
+    "max_symbols": 58,
+    "always_include": ["SPY", "QQQ", "SMH", "DIA", "IWM", "NVDA", "AAPL", "TSLA"],
+    "etf_symbols": ["SPY", "QQQ", "SMH", "DIA", "IWM"]
   },
 
   "performance": {

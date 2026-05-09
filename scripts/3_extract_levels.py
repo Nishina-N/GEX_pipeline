@@ -403,6 +403,8 @@ def filter_oi_surge_by_gamma() -> None:
 
     filtered_symbols = []
     removed_symbols = []
+    # symbol -> {"passed": bool, "reason": str} — levels JSON 書き戻し用
+    filter_results: dict = {}
 
     for entry in results:
         symbol = entry.get("symbol")
@@ -451,6 +453,7 @@ def filter_oi_surge_by_gamma() -> None:
 
         if skip_filter:
             filtered_symbols.append(symbol)
+            filter_results[symbol] = {"passed": True, "reason": "always_include_skip"}
             logging.info(
                 f"[GammaFilter] [{symbol}] always_include のためフィルタをスキップ"
                 f"（gamma: {gamma_sentiment}, surge_pattern: {surge_pattern}）"
@@ -461,9 +464,11 @@ def filter_oi_surge_by_gamma() -> None:
         if gamma_sentiment is None:
             if no_data_behavior == "include":
                 filtered_symbols.append(symbol)
+                filter_results[symbol] = {"passed": True, "reason": "no_gex_data_included"}
                 logging.info(f"[GammaFilter] [{symbol}] GEX データなし → 保持（no_data_behavior=include）")
             else:
                 removed_symbols.append(symbol)
+                filter_results[symbol] = {"passed": False, "reason": "no_gex_data"}
                 logging.info(f"[GammaFilter] [{symbol}] GEX データなし → 除外（no_data_behavior=exclude）")
             continue
 
@@ -488,16 +493,33 @@ def filter_oi_surge_by_gamma() -> None:
 
         if exclude:
             removed_symbols.append(symbol)
+            filter_results[symbol] = {"passed": False, "reason": exclude_reason}
             logging.info(f"[GammaFilter] [{symbol}] 除外 → {exclude_reason}")
         else:
             filtered_symbols.append(symbol)
+            filter_results[symbol] = {"passed": True, "reason": "gamma_filter_passed"}
             logging.info(
                 f"[GammaFilter] [{symbol}] 保持 "
                 f"（surge_pattern: {surge_pattern}, gex_applicable: {gex_applicable}）"
             )
 
+    # ── ETF銘柄の自動保持 ────────────────────────────────────────────────
+    # ETF銘柄（OIスクリーニング対象外）は screening_results に含まれず
+    # メインループで処理されない。ここで明示的に保持する。
+    etf_symbols = screener_cfg.get("output", {}).get("etf_symbols", [])
+    for symbol in original_symbols:
+        if (symbol in etf_symbols
+                and symbol not in filtered_symbols
+                and symbol not in removed_symbols):
+            filtered_symbols.append(symbol)
+            filter_results[symbol] = {"passed": True, "reason": "etf_auto_retain"}
+            logging.info(
+                f"[GammaFilter] [{symbol}] ETFシンボル（OIスクリーニング対象外）→ 自動保持"
+            )
+
     # 元の順序を維持しながらフィルタ済みリストを再構築
-    filtered_symbols_ordered = [s for s in original_symbols if s in filtered_symbols]
+    filtered_symbols_set = set(filtered_symbols)
+    filtered_symbols_ordered = [s for s in original_symbols if s in filtered_symbols_set]
 
     surge_data["symbols"] = filtered_symbols_ordered
     surge_data["gamma_filter_applied"] = True
@@ -512,6 +534,23 @@ def filter_oi_surge_by_gamma() -> None:
         )
     except Exception as e:
         logging.error(f"[GammaFilter] {OI_SURGE_FILE} の保存に失敗: {e}")
+
+    # ── levels JSON にフィルタ結果を書き戻す ──────────────────────────────
+    # 各銘柄の data/levels/{symbol}.json に gamma_filter_passed / gamma_filter_reason を追記する
+    for symbol in original_symbols:
+        level_path = os.path.join(LEVELS_DIR, f"{symbol}.json")
+        if not os.path.exists(level_path):
+            continue
+        try:
+            with open(level_path, 'r') as f:
+                level_data = json.load(f)
+            fr = filter_results.get(symbol, {"passed": True, "reason": "not_in_screening"})
+            level_data["gamma_filter_passed"] = fr["passed"]
+            level_data["gamma_filter_reason"] = fr["reason"]
+            with open(level_path, 'w') as f:
+                json.dump(level_data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logging.warning(f"[GammaFilter] [{symbol}] levels JSON 更新失敗: {e}")
 
 
 def main():
