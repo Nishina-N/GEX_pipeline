@@ -496,6 +496,18 @@ def filter_oi_surge_by_gamma() -> None:
                 f"（surge_pattern: {surge_pattern}, gex_applicable: {gex_applicable}）"
             )
 
+    # ETF銘柄は OI スクリーニング対象外のため screening_results に含まれず
+    # メインループでは処理されない。ここで明示的に自動保持する。
+    etf_symbols = screener_cfg.get("output", {}).get("etf_symbols", [])
+    for symbol in original_symbols:
+        if (symbol in etf_symbols
+                and symbol not in filtered_symbols
+                and symbol not in removed_symbols):
+            filtered_symbols.append(symbol)
+            logging.info(
+                f"[GammaFilter] [{symbol}] ETFシンボル（OIスクリーニング対象外）→ 自動保持"
+            )
+
     # 元の順序を維持しながらフィルタ済みリストを再構築
     filtered_symbols_ordered = [s for s in original_symbols if s in filtered_symbols]
 
