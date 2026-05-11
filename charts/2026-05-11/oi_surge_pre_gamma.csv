@@ -1,0 +1,6 @@
+symbol,spot_price,bullish_score,call_oi_change_pct,total_oi_change_pct,total_oi,call_oi,put_oi,pcr,otm_call_ratio,totalGEX,gamma_sentiment,gex_applicable,surge_pattern
+CVNA,76.23,87.03,431.8,419.45,1329204,687849,641355,0.9324,0.8176,28296701.62302984,positive_gamma,insufficient,breakout_momentum
+ECL,251.1,63.14,21.64,27.4,8452,5019,3433,0.684,0.9934,-984361.3677862203,negative_gamma,insufficient,pre_breakout
+AIR,117.57,37.79,13.72,20.34,1130,547,583,1.0658,0.4497,-83393.67338425049,positive_gamma,insufficient,breakout_momentum
+ADEA,31.84,9.29,2.73,49.97,6966,2818,4148,1.472,0.1718,10041.729920166916,positive_gamma,insufficient,breakout_momentum
+CON,25.0,4.57,-0.44,1194.25,2925,225,2700,12.0,0.1067,-117785.47257704151,positive_gamma,insufficient,breakout_momentum
