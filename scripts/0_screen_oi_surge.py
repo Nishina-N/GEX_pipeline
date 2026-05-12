@@ -10,7 +10,7 @@ S&P500 / NASDAQ100 / Russell2000 ユニバースから
   2. 時価総額フィルタ（$2B以上）
   3. 前日OIキャッシュをR2から取得
   4. 本日OIスナップショットを並列取得
-  5. OI変化率ゲートフィルタ（+20%以上かつ1000枚以上）
+  5. OI変化率ゲートフィルタ（+10%以上 かつ 絶対増加5000枚以上 かつ 合計1000枚以上）
   6. 強気スコア計算・ランキング
   7. 出力: data/symbols_oi_surge.json
   8. 当日OIキャッシュをR2に保存（翌日用）
@@ -428,13 +428,20 @@ def save_oi_cache_to_r2(date_str: str, snapshots: dict, s3_client, config: dict,
 
 def compute_oi_changes(today_snapshots: dict, yesterday_cache: dict, config: dict) -> dict[str, dict]:
     """
-    前日比OI変化を計算し、ゲートフィルタ（変化率+min_oi）を適用する。
+    前日比OI変化を計算し、ゲートフィルタを適用する。
+
+    フィルタ条件（AND）:
+      - total_oi_change_pct >= min_oi_change_pct  （変化率、デフォルト10%）
+      - total_oi_change_abs >= min_oi_change_abs   （絶対増加枚数、デフォルト5000枚）
+      - today_total >= min_total_oi                （最低OI枚数、デフォルト1000枚）
+
     返り値: {symbol: {...変化情報...}} フィルタ通過銘柄のみ
     """
-    min_change = config["screening"]["min_oi_change_pct"]
-    min_oi     = config["screening"]["min_total_oi"]
-    yesterday  = yesterday_cache.get("snapshots", {})
-    result     = {}
+    min_change     = config["screening"]["min_oi_change_pct"]
+    min_change_abs = config["screening"].get("min_oi_change_abs", 0)
+    min_oi         = config["screening"]["min_total_oi"]
+    yesterday      = yesterday_cache.get("snapshots", {})
+    result         = {}
 
     for sym, today in today_snapshots.items():
         prev = yesterday.get(sym)
@@ -449,8 +456,13 @@ def compute_oi_changes(today_snapshots: dict, yesterday_cache: dict, config: dic
         if prev_total_oi <= 0 or today_total < min_oi:
             continue
 
-        total_change_pct = (today_total - prev_total_oi) / prev_total_oi * 100
+        total_change_abs = today_total - prev_total_oi
+        total_change_pct = total_change_abs / prev_total_oi * 100
+
+        # ゲートフィルタ: 変化率 AND 絶対増加枚数の両方を満たす必要がある
         if total_change_pct < min_change:
+            continue
+        if total_change_abs < min_change_abs:
             continue
 
         call_change_pct = (
@@ -464,6 +476,7 @@ def compute_oi_changes(today_snapshots: dict, yesterday_cache: dict, config: dic
             "total_oi_today":      today_total,
             "total_oi_yesterday":  prev_total_oi,
             "total_oi_change_pct": round(total_change_pct, 2),
+            "total_oi_change_abs": total_change_abs,
             "call_oi_today":       today_call,
             "call_oi_yesterday":   prev_call_oi,
             "call_oi_change_pct":  round(call_change_pct, 2),
@@ -472,7 +485,8 @@ def compute_oi_changes(today_snapshots: dict, yesterday_cache: dict, config: dic
             "otm_call_ratio":      today["otm_call_ratio"],
         }
 
-    logging.info(f"[Filter] {len(result)} symbols passed OI gate filter")
+    logging.info(f"[Filter] {len(result)} symbols passed OI gate filter "
+                 f"(pct>={min_change}%, abs>={min_change_abs}枚, total_oi>={min_oi}枚)")
     return result
 
 
@@ -523,6 +537,7 @@ def screen_and_rank(change_map: dict, config: dict) -> list[dict]:
             "bullish_score":       bs,
             "call_oi_change_pct":  data["call_oi_change_pct"],
             "total_oi_change_pct": data["total_oi_change_pct"],
+            "total_oi_change_abs": data.get("total_oi_change_abs", 0),
             "total_oi":            data["total_oi_today"],
             "call_oi":             data["call_oi_today"],
             "put_oi":              data["put_oi_today"],

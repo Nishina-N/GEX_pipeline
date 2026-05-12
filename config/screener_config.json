@@ -17,7 +17,8 @@
   },
 
   "screening": {
-    "min_oi_change_pct": 20.0,
+    "min_oi_change_pct": 10.0,
+    "min_oi_change_abs": 5000,
     "min_total_oi": 1000,
     "top_n": 50
   },
