@@ -1,0 +1,5 @@
+symbol,spot_price,bullish_score,call_oi_change_pct,total_oi_change_pct,total_oi,call_oi,put_oi,pcr,otm_call_ratio,totalGEX,gamma_sentiment,gex_applicable,surge_pattern
+FORM,132.02,91.78,79.45,61.11,31012,21364,9648,0.4516,0.8557,838423.7432493626,positive_gamma,insufficient,breakout_momentum
+CAG,14.0,71.52,33.61,23.1,122933,80365,42568,0.5297,0.676,195199.99640083645,negative_gamma,insufficient,pre_breakout
+FLY,39.32,68.0,34.65,23.94,121269,86091,35178,0.4086,0.5633,3374547.9390891246,positive_gamma,insufficient,breakout_momentum
+COST,1021.88,35.46,10.66,15.02,159010,67934,91076,1.3407,0.6163,103779789.12126587,positive_gamma,low,breakout_momentum
