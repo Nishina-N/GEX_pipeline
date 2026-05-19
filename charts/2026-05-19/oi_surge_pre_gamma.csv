@@ -1,0 +1,11 @@
+symbol,spot_price,bullish_score,call_oi_change_pct,total_oi_change_pct,total_oi,call_oi,put_oi,pcr,otm_call_ratio,totalGEX,gamma_sentiment,gex_applicable,surge_pattern
+CPB,20.21,65.13,12.82,12.16,69437,47332,22105,0.467,0.7507,949617.4587369577,positive_gamma,insufficient,breakout_momentum
+GE,285.28,63.49,21.81,12.0,147953,88361,59592,0.6744,0.8655,27253843.203247536,negative_gamma,insufficient,pre_breakout
+CAG,13.93,61.13,9.66,10.8,117368,81382,35986,0.4422,0.6363,1421701.40220259,positive_gamma,insufficient,breakout_momentum
+CMCSA,24.8,60.3,8.18,13.65,225513,141044,84469,0.5989,0.9119,-11954.99989873499,negative_gamma,insufficient,pre_breakout
+ABT,88.82,59.48,17.9,12.06,91787,52270,39517,0.756,0.7056,2097493.4040553262,positive_gamma,insufficient,breakout_momentum
+FIS,43.5,57.53,20.82,44.61,21675,11654,10021,0.8599,0.9467,-435153.7024864802,negative_gamma,insufficient,pre_breakout
+GLW,175.83,54.17,12.7,13.41,195165,106821,88344,0.827,0.6743,-1345146.7248698948,negative_gamma,insufficient,pre_breakout
+APA,40.91,54.11,16.95,11.83,117454,81237,36217,0.4458,0.4044,5475505.414657228,positive_gamma,insufficient,breakout_momentum
+DECK,94.27,52.78,29.48,40.6,35279,16534,18745,1.1337,0.8756,-739760.6565509895,positive_gamma,insufficient,breakout_momentum
+GIS,33.77,52.34,3.82,18.54,80855,44764,36091,0.8063,0.9779,-241569.44471967506,negative_gamma,insufficient,pre_breakout
