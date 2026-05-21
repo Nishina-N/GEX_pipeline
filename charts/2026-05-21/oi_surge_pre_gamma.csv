@@ -1,0 +1,12 @@
+symbol,spot_price,bullish_score,call_oi_change_pct,total_oi_change_pct,total_oi,call_oi,put_oi,pcr,otm_call_ratio,totalGEX,gamma_sentiment,gex_applicable,surge_pattern
+UNP,265.44,85.32,63.29,48.29,110255,90561,19694,0.2175,0.9063,67755526.96366477,negative_gamma,low,pre_breakout
+DOC,19.64,74.74,199.75,120.66,29216,23989,5227,0.2179,0.1105,2270708.5061887885,positive_gamma,insufficient,breakout_momentum
+TPR,139.11,72.82,32.06,21.99,32494,24021,8473,0.3527,0.7047,5759340.354153258,positive_gamma,insufficient,breakout_momentum
+HBAN,15.85,65.27,30.49,16.21,39292,22702,16590,0.7308,0.8957,214566.52055033843,negative_gamma,insufficient,pre_breakout
+NCLH,16.47,63.58,21.25,13.68,262778,157911,104867,0.6641,0.8346,1589917.3825919991,positive_gamma,insufficient,breakout_momentum
+TFC,47.89,58.25,37.9,15.43,70749,34281,36468,1.0638,0.8767,-56002.20701415075,negative_gamma,insufficient,pre_breakout
+INTU,307.07,56.99,26.56,34.52,91234,46683,44551,0.9543,0.9936,-15392294.328347536,positive_gamma,insufficient,breakout_momentum
+NVDA,219.51,53.14,11.34,10.12,7284253,4228046,3056207,0.7228,0.5901,832081771.5319763,positive_gamma,moderate,breakout_momentum
+DE,531.35,46.92,17.63,20.04,36829,16964,19865,1.171,0.9019,-29325145.712594714,positive_gamma,insufficient,breakout_momentum
+GS,988.17,44.29,24.87,17.06,148203,73610,74593,1.0134,0.4607,243564552.09776282,positive_gamma,moderate,breakout_momentum
+WMT,121.34,38.96,11.95,14.86,474903,201161,273742,1.3608,0.8302,-89417897.51799215,negative_gamma,low,pre_breakout
