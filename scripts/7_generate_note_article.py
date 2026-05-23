@@ -10,7 +10,6 @@ import os
 import sys
 import json
 import logging
-from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -18,7 +17,7 @@ load_dotenv()
 
 import anthropic
 
-from market_calendar import get_previous_market_day
+from market_calendar import get_previous_market_day, get_pipeline_date
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -367,7 +366,7 @@ def generate_article(prompt: str) -> dict:
 # ── エントリーポイント ────────────────────────────────────────────────────────
 
 def main():
-    today = date.today().isoformat()
+    today = get_pipeline_date()
 
     # 銘柄リスト決定
     core_symbols = CORE_SYMBOLS

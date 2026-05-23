@@ -21,6 +21,8 @@ import numpy as np
 import pandas as pd
 from scipy.stats import norm
 
+from market_calendar import get_pipeline_date
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -336,8 +338,8 @@ def calculate_gex_for_symbol(options_data, config):
     q = dividend_yields.get(symbol, config.get('dividend_yield_default', 0.013))
     contract_size = config.get('contract_size', 100)
 
-    today = datetime.now()
-    today_str = today.strftime('%Y-%m-%d')
+    today_str = get_pipeline_date()
+    today = datetime.strptime(today_str, '%Y-%m-%d')
 
     # 残存年数を計算
     chain['expiration_dt'] = pd.to_datetime(chain['expiration'])

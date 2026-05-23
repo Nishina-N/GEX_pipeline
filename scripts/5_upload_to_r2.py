@@ -46,6 +46,8 @@ MAX_WORKERS = 5
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "settings.json")
 
+from market_calendar import get_pipeline_date
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -525,7 +527,7 @@ def main():
 
     config = load_config()
     retention_days = config.get('gex_retention_days', 30)
-    date_str = pd.Timestamp.now().strftime('%Y-%m-%d')
+    date_str = get_pipeline_date()
 
     s3 = create_s3_client()
     total_success, total_fail = 0, 0
