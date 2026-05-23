@@ -14,14 +14,13 @@ import os
 import sys
 import json
 import logging
-from datetime import date
 from pathlib import Path
 
 import boto3
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 
-from market_calendar import get_previous_market_day
+from market_calendar import get_previous_market_day, get_pipeline_date
 
 load_dotenv()
 
@@ -125,7 +124,7 @@ def download_gex_from_r2(date_str: str, symbols: list[str], s3_client) -> bool:
 
 
 def main():
-    today = date.today().isoformat()
+    today = get_pipeline_date()
     
     # 前営業日を特定
     prev_market_day = get_previous_market_day(today)

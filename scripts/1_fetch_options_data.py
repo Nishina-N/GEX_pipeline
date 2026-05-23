@@ -14,6 +14,8 @@ import argparse
 import yfinance as yf
 import pandas as pd
 
+from market_calendar import get_effective_market_date, set_pipeline_date
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -196,7 +198,10 @@ def main(symbols=None, symbols_from=None):
     delay      = config['rate_limit']['delay_between_symbols']
     max_retries = config['rate_limit']['max_retries']
     backoff    = config['rate_limit']['backoff_factor']
-    today_str  = pd.Timestamp.now().strftime('%Y-%m-%d')
+    # 有効な市場営業日を決定してファイルに書き込む（Step 2〜7 はここから読む）
+    today_str = get_effective_market_date()
+    set_pipeline_date(today_str)
+    logging.info(f"Effective market date (pipeline date): {today_str}")
 
     os.makedirs(OPTIONS_DIR, exist_ok=True)
     os.makedirs(IV_HIST_DIR, exist_ok=True)
