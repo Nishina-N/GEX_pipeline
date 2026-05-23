@@ -85,7 +85,7 @@ jobs:
 
       - name: 7. Commit charts to GitHub
         run: |
-          DATE=$(date +%Y-%m-%d)
+          DATE=$(cat data/effective_date.txt 2>/dev/null || date +%Y-%m-%d)
           mkdir -p charts/$DATE
           cp data/charts/*.png charts/$DATE/ 2>/dev/null || true
           git config user.name "github-actions[bot]"
