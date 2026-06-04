@@ -1,0 +1,11 @@
+symbol,spot_price,bullish_score,call_oi_change_pct,total_oi_change_pct,total_oi,call_oi,put_oi,pcr,otm_call_ratio,totalGEX,gamma_sentiment,gex_applicable,surge_pattern
+ULTA,471.21,76.37,61.13,56.8,42698,24133,18565,0.7693,0.9584,-9713826.242783766,positive_gamma,insufficient,breakout_momentum
+DVN,46.18,67.0,17.49,15.36,505131,427810,77321,0.1807,0.8196,36124196.568133414,positive_gamma,insufficient,breakout_momentum
+BMY,54.72,66.55,23.77,14.14,317761,198783,118978,0.5985,0.8614,-2414024.6363820825,negative_gamma,insufficient,pre_breakout
+CLX,88.53,65.69,14.23,10.69,56077,40798,15279,0.3745,0.9269,2152329.588194454,negative_gamma,insufficient,pre_breakout
+MDT,77.95,61.94,13.0,16.88,119711,74420,45291,0.6086,0.7649,7864407.028163877,positive_gamma,insufficient,breakout_momentum
+BX,110.28,33.73,2.87,15.79,189807,78628,111179,1.414,0.9609,-39932196.356407896,negative_gamma,insufficient,pre_breakout
+BNY,140.57,32.36,35.94,12.12,55457,18865,36592,1.9397,0.4196,1371730.7804151487,positive_gamma,insufficient,breakout_momentum
+PANW,280.43,32.18,19.36,22.53,348855,157845,191010,1.2101,0.3672,11450616.157878127,positive_gamma,insufficient,breakout_momentum
+COHR,417.43,27.56,11.85,10.97,152336,68495,83841,1.224,0.3393,16205459.01554526,positive_gamma,insufficient,breakout_momentum
+MRVL,301.65,20.52,14.69,13.71,1025828,479987,545841,1.1372,0.0877,92454511.76656838,positive_gamma,low,breakout_momentum
