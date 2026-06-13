@@ -40,29 +40,42 @@ def load_config():
 
 
 # ─────────────────────────────────────────────────────────────
-# Black-Scholes 補助関数（BAW内部で使用）
+# Black-Scholes 補助関数（BAW内部で使用、ベクトル化）
+# ─────────────────────────────────────────────────────────────
+#
+# 旧実装は 1 コントラクトずつ chain.iterrows() で baw_gamma() を呼び、
+# 内部で scipy.stats.norm をスカラー評価していた。本実装は全コントラクトを
+# numpy 配列として一括処理する（計算式・許容誤差・反復回数は旧版と同一）。
+#
+# 数値はベクトル演算の順序差により末尾桁が動き得るが（相対 ~1e-12 以下）、
+# Wall/HVL/totalGEX の表示精度には影響しない。
+#
+# 【バグ修正】旧実装は配当なしコール (b>=r, S_crit=inf) で
+#   A2 = inf * (1 - 1) = nan となり gamma=nan を返していた。
+# 無配当アメリカンコールは早期行使が最適でない → BS と一致するため、
+# 本実装では S_crit=inf のとき早期行使プレミアム=0（純BSガンマ）に帰着させる。
+
+
+def _bs_price_vec(S, K, T, b, r, sigma, is_call):
+    """
+    Black-Scholes価格（コスト・オブ・キャリー b = r - q）。配列対応。
+    is_call: bool 配列（True=コール / False=プット）。S はスカラーまたは配列。
+    """
+    sqT = sigma * np.sqrt(T)
+    d1 = (np.log(S / K) + (b + 0.5 * sigma ** 2) * T) / sqT
+    d2 = d1 - sqT
+    call = S * np.exp((b - r) * T) * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
+    put = K * np.exp(-r * T) * norm.cdf(-d2) - S * np.exp((b - r) * T) * norm.cdf(-d1)
+    return np.where(is_call, call, put)
+
+
+# ─────────────────────────────────────────────────────────────
+# BAW モデル（ベクトル化）
 # ─────────────────────────────────────────────────────────────
 
-def _bs_price(S, K, T, b, r, sigma, option_type):
+def _baw_q_params_vec(T, r, q, sigma):
     """
-    Black-Scholes価格（コスト・オブ・キャリー b = r - q を使用）。
-    S, K, T, b, r, sigma はすべてスカラーを想定。
-    """
-    d1 = (np.log(S / K) + (b + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
-    d2 = d1 - sigma * np.sqrt(T)
-    if option_type == 'call':
-        return S * np.exp((b - r) * T) * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
-    else:
-        return K * np.exp(-r * T) * norm.cdf(-d2) - S * np.exp((b - r) * T) * norm.cdf(-d1)
-
-
-# ─────────────────────────────────────────────────────────────
-# BAW モデル
-# ─────────────────────────────────────────────────────────────
-
-def _baw_q_params(T, r, q, sigma):
-    """
-    BAW補助パラメータ (q1, q2) を算出する。
+    BAW補助パラメータ (q1, q2) を配列で算出する。
       M = 2r/σ²,  N = 2(r-q)/σ²,  k = 1 - e^{-rT}
       q2 = (-(N-1) + sqrt((N-1)² + 4M/k)) / 2  > 0
       q1 = (-(N-1) - sqrt((N-1)² + 4M/k)) / 2  < 0
@@ -70,150 +83,161 @@ def _baw_q_params(T, r, q, sigma):
     b = r - q
     M = 2.0 * r / sigma ** 2
     N = 2.0 * b / sigma ** 2
-    k = 1.0 - np.exp(-r * T)
-    # k が 0 に近い場合（r≈0 または T≈0）のガード
-    if k < 1e-10:
-        k = 1e-10
-    discriminant = max((N - 1) ** 2 + 4.0 * M / k, 0.0)
+    k = np.maximum(1.0 - np.exp(-r * T), 1e-10)   # r≈0 / T≈0 のガード
+    discriminant = np.maximum((N - 1) ** 2 + 4.0 * M / k, 0.0)
     sq = np.sqrt(discriminant)
     q2 = (-(N - 1) + sq) / 2.0
     q1 = (-(N - 1) - sq) / 2.0
     return q1, q2
 
 
-def _find_call_critical(K, T, b, r, sigma, q2, max_iter=50, tol=1e-6):
+def _newton_vec(S_init, K, T, b, r, sigma, qparam, is_call, max_iter=50, tol=1e-6):
     """
-    ニュートン法でコールの早期行使臨界価格 S* を求める。
-    条件: S* - K = C_BS(S*) + (S*/q2) * (1 - e^{(b-r)T} * N(d1(S*)))
-    S* > K が保証されるようクランプする。
+    早期行使臨界価格をニュートン法でベクトル求解する（コール/プット共通）。
+    収束済み・|df|<1e-12 の要素は更新を凍結し、旧スカラー実装の break/return と
+    同じ停止挙動を再現する。クランプ:
+      コール: S >= K*1.001
+      プット: K*0.001 <= S <= K*0.999
     """
-    # 初期値: ATM近傍のやや高め
-    S = K * (1.0 + sigma * np.sqrt(T))
-    S = max(S, K * 1.001)
+    S = S_init.copy()
+    converged = np.zeros(S.shape, dtype=bool)
+    exp_br = np.exp((b - r) * T)
+    sqT = sigma * np.sqrt(T)
 
     for _ in range(max_iter):
-        d1 = (np.log(S / K) + (b + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
-        C_bs = _bs_price(S, K, T, b, r, sigma, 'call')
-        early_factor = np.exp((b - r) * T) * norm.cdf(d1)
+        d1 = (np.log(S / K) + (b + 0.5 * sigma ** 2) * T) / sqT
+        if is_call:
+            bs = _bs_price_vec(S, K, T, b, r, sigma, True)
+            early = exp_br * norm.cdf(d1)
+            f = (S - K) - bs - (S / qparam) * (1.0 - early)
+            d_bs_dS = exp_br * norm.cdf(d1)
+            d_early_dS = exp_br * norm.pdf(d1) / (S * sqT)
+            df = 1.0 - d_bs_dS - (1.0 / qparam) * (1.0 - early) + (S / qparam) * d_early_dS
+        else:
+            bs = _bs_price_vec(S, K, T, b, r, sigma, False)
+            early = exp_br * norm.cdf(-d1)
+            f = (K - S) - bs + (S / qparam) * (1.0 - early)
+            d_early_dS = -exp_br * norm.pdf(d1) / (S * sqT)
+            df = -1.0 + early + (1.0 / qparam) * (1.0 - early) - (S / qparam) * d_early_dS
 
-        f = (S - K) - C_bs - (S / q2) * (1.0 - early_factor)
+        small_df = np.abs(df) < 1e-12
+        step = np.where(small_df, 0.0, f / np.where(small_df, 1.0, df))
+        S_new = S - step
+        if is_call:
+            S_new = np.maximum(S_new, K * 1.001)
+        else:
+            S_new = np.minimum(S_new, K * 0.999)
+            S_new = np.maximum(S_new, K * 0.001)
 
-        # df/dS の解析的導関数
-        d_Cbs_dS = np.exp((b - r) * T) * norm.cdf(d1)            # コールのデルタ
-        d_early_dS = np.exp((b - r) * T) * norm.pdf(d1) / (S * sigma * np.sqrt(T))
-        df = 1.0 - d_Cbs_dS - (1.0 / q2) * (1.0 - early_factor) + (S / q2) * d_early_dS
-
-        if abs(df) < 1e-12:
+        newly_conv = np.abs(S_new - S) < tol
+        active = ~converged
+        update_mask = active & ~small_df
+        S = np.where(update_mask, S_new, S)
+        # |df|<1e-12 は現値のまま凍結、更新後 tol 未満も凍結（スカラー return 相当）
+        converged = converged | (active & small_df) | (update_mask & newly_conv)
+        if converged.all():
             break
-
-        S_new = S - f / df
-        S_new = max(S_new, K * 1.001)
-
-        if abs(S_new - S) < tol:
-            return S_new
-        S = S_new
 
     return S
 
 
-def _find_put_critical(K, T, b, r, sigma, q1, max_iter=50, tol=1e-6):
+def _baw_price_given_critical_vec(S, K, T, b, r, sigma, q1, q2, S_crit, is_call):
     """
-    ニュートン法でプットの早期行使臨界価格 S** を求める。
-    条件: K - S** = P_BS(S**) - (S**/q1) * (1 - e^{(b-r)T} * N(-d1(S**)))
-    0 < S** < K が保証されるようクランプする。
+    事前計算済み臨界価格 S_crit を用いて BAW 価格を配列で返す（3点評価で再利用）。
+    S はスカラー（スポット±ΔS）、その他は配列。S_crit=inf（無配当コール）は
+    早期行使プレミアム=0 として純 BS 価格に帰着させる。
     """
-    # 初期値: ATMよりやや低め
-    S = K * max(0.5, 1.0 - sigma * np.sqrt(T))
-    S = min(S, K * 0.999)
-    S = max(S, K * 0.001)
+    bs = _bs_price_vec(S, K, T, b, r, sigma, is_call)
 
-    for _ in range(max_iter):
-        d1 = (np.log(S / K) + (b + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
-        P_bs = _bs_price(S, K, T, b, r, sigma, 'put')
-        early_factor = np.exp((b - r) * T) * norm.cdf(-d1)
+    # inf を含むと A2/A1 が nan になるため、計算用にダミー値で置換し後で上書き
+    inf_crit = np.isinf(S_crit)
+    S_crit_safe = np.where(inf_crit, K, S_crit)
 
-        f = (K - S) - P_bs + (S / q1) * (1.0 - early_factor)
+    sqT = sigma * np.sqrt(T)
+    d1_crit = (np.log(S_crit_safe / K) + (b + 0.5 * sigma ** 2) * T) / sqT
+    ratio = S / S_crit_safe
 
-        # df/dS の解析的導関数
-        # dP_bs/dS = -exp((b-r)T) * N(-d1) = -early_factor
-        # d(early_factor)/dS = -exp((b-r)T) * N'(d1) / (S * sigma * sqrt(T))
-        d_early_dS = -np.exp((b - r) * T) * norm.pdf(d1) / (S * sigma * np.sqrt(T))
-        df = -1.0 + early_factor + (1.0 / q1) * (1.0 - early_factor) - (S / q1) * d_early_dS
+    # コール枝
+    A2 = (S_crit_safe / q2) * (1.0 - np.exp((b - r) * T) * norm.cdf(d1_crit))
+    call_val = np.where(S >= S_crit, np.maximum(S - K, 0.0), bs + A2 * ratio ** q2)
+    call_val = np.where(inf_crit, bs, call_val)   # 無配当コール → 純BS
 
-        if abs(df) < 1e-12:
-            break
+    # プット枝（S_crit に inf は来ない）
+    A1 = -(S_crit_safe / q1) * (1.0 - np.exp((b - r) * T) * norm.cdf(-d1_crit))
+    put_val = np.where(S <= S_crit, np.maximum(K - S, 0.0), bs + A1 * ratio ** q1)
 
-        S_new = S - f / df
-        S_new = min(S_new, K * 0.999)
-        S_new = max(S_new, K * 0.001)
-
-        if abs(S_new - S) < tol:
-            return S_new
-        S = S_new
-
-    return S
+    return np.where(is_call, call_val, put_val)
 
 
-def _baw_price_given_critical(S, K, T, b, r, sigma, q1, q2, S_critical, option_type):
+def baw_gamma_batch(S, K, T, r, q, sigma, is_call):
     """
-    事前計算済みの臨界価格・q1/q2 を使って BAW 価格を返す。
-    Newton 計算をスキップできるため、数値微分での 3 点評価に使用する。
-    """
-    C_or_P_bs = _bs_price(S, K, T, b, r, sigma, option_type)
-
-    if option_type == 'call':
-        if S >= S_critical:
-            return max(S - K, 0.0)
-        d1_crit = (np.log(S_critical / K) + (b + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
-        A2 = (S_critical / q2) * (1.0 - np.exp((b - r) * T) * norm.cdf(d1_crit))
-        return C_or_P_bs + A2 * (S / S_critical) ** q2
-    else:
-        if S <= S_critical:
-            return max(K - S, 0.0)
-        d1_crit = (np.log(S_critical / K) + (b + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
-        A1 = -(S_critical / q1) * (1.0 - np.exp((b - r) * T) * norm.cdf(-d1_crit))
-        return C_or_P_bs + A1 * (S / S_critical) ** q1
-
-
-def baw_gamma(S, K, T, r, q, sigma, option_type):
-    """
-    BAW (Barone-Adesi Whaley) ガンマを数値二次微分で算出する。
+    全コントラクトの BAW ガンマを数値二次微分で一括算出する。
 
       Γ = (V(S+ΔS) - 2·V(S) + V(S-ΔS)) / ΔS²   (ΔS = S × 0.001)
 
-    臨界価格 S* (または S**) はニュートン法で 1 回だけ求め、
-    3 点の価格評価で再利用することで計算コストを削減する。
+    Args:
+        S (float):   スポット価格（全コントラクト共通スカラー）
+        K, T, sigma: ストライク / 残存年数 / IV の numpy 配列
+        r, q (float): 無リスク金利 / 配当利回り（銘柄共通スカラー）
+        is_call (np.ndarray[bool]): コール=True / プット=False
+
+    Returns:
+        np.ndarray: ガンマ配列（非負、深いOTM・無効値は 0）
     """
-    sigma = max(float(sigma), 0.001)
-    T = max(float(T), 1.0 / 365)
+    K = np.asarray(K, dtype=float)
+    T = np.asarray(T, dtype=float)
+    sigma = np.asarray(sigma, dtype=float)
+    is_call = np.asarray(is_call, dtype=bool)
+
+    if K.size == 0:
+        return np.zeros(0, dtype=float)
+
+    sigma = np.maximum(sigma, 0.001)
+    T = np.maximum(T, 1.0 / 365)
     b = r - q
     dS = S * 0.001
 
-    # 深すぎる OTM はガンマ ≈ 0（計算スキップで高速化）
-    moneyness_sigma = abs(np.log(S / K)) / (sigma * np.sqrt(T))
-    if moneyness_sigma > 5.0:
-        return 0.0
+    deep_otm = np.abs(np.log(S / K)) / (sigma * np.sqrt(T)) > 5.0
 
-    # BAW パラメータを一度だけ計算
-    q1, q2 = _baw_q_params(T, r, q, sigma)
+    q1, q2 = _baw_q_params_vec(T, r, q, sigma)
 
-    if option_type == 'call':
+    # 臨界価格をコール/プット別に求解
+    S_crit = np.empty(K.shape, dtype=float)
+    call_mask = is_call
+    put_mask = ~is_call
+
+    if call_mask.any():
         if b >= r:
-            # 配当なしのコール: 早期行使は最適でない → BSガンマを数値微分で代替
-            # (BSの場合も数値微分で統一)
-            S_crit = float('inf')
+            # 配当なしコール: 早期行使は最適でない → 純BSガンマ（プレミアム=0）
+            S_crit[call_mask] = np.inf
         else:
-            S_crit = _find_call_critical(K, T, b, r, sigma, q2)
-    else:
-        S_crit = _find_put_critical(K, T, b, r, sigma, q1)
+            S0 = np.maximum(
+                K[call_mask] * (1.0 + sigma[call_mask] * np.sqrt(T[call_mask])),
+                K[call_mask] * 1.001
+            )
+            S_crit[call_mask] = _newton_vec(
+                S0, K[call_mask], T[call_mask], b, r, sigma[call_mask],
+                q2[call_mask], is_call=True
+            )
 
-    # 3 点評価（S_crit は共有）
-    V_up = _baw_price_given_critical(S + dS, K, T, b, r, sigma, q1, q2, S_crit, option_type)
-    V_mid = _baw_price_given_critical(S, K, T, b, r, sigma, q1, q2, S_crit, option_type)
-    V_dn = _baw_price_given_critical(S - dS, K, T, b, r, sigma, q1, q2, S_crit, option_type)
+    if put_mask.any():
+        S0 = K[put_mask] * np.maximum(0.5, 1.0 - sigma[put_mask] * np.sqrt(T[put_mask]))
+        S0 = np.minimum(S0, K[put_mask] * 0.999)
+        S0 = np.maximum(S0, K[put_mask] * 0.001)
+        S_crit[put_mask] = _newton_vec(
+            S0, K[put_mask], T[put_mask], b, r, sigma[put_mask],
+            q1[put_mask], is_call=False
+        )
+
+    # 3 点評価（S_crit / q1 / q2 を共有）
+    V_up = _baw_price_given_critical_vec(S + dS, K, T, b, r, sigma, q1, q2, S_crit, is_call)
+    V_mid = _baw_price_given_critical_vec(S, K, T, b, r, sigma, q1, q2, S_crit, is_call)
+    V_dn = _baw_price_given_critical_vec(S - dS, K, T, b, r, sigma, q1, q2, S_crit, is_call)
 
     gamma = (V_up - 2.0 * V_mid + V_dn) / (dS ** 2)
-    return max(gamma, 0.0)  # ガンマは非負
+    gamma = np.maximum(gamma, 0.0)          # ガンマは非負
+    gamma = np.where(deep_otm, 0.0, gamma)  # 深いOTMは 0
+    return gamma
 
 
 # ─────────────────────────────────────────────────────────────
@@ -357,22 +381,18 @@ def calculate_gex_for_symbol(options_data, config):
         f"(spot={spot:.2f}, r={r}, q={q})..."
     )
 
-    # ── BAW ガンマ計算（行ごと） ──────────────────────────────
-    # S* はコントラクトごとに 1 回だけ Newton 法で求め、
+    # ── BAW ガンマ計算（全コントラクト一括） ──────────────────
+    # 臨界価格 S* はコール/プット別に Newton 法でベクトル求解し、
     # 数値微分の 3 点評価で再利用することで計算量を削減している。
-    gammas = [
-        baw_gamma(
-            S=spot,
-            K=float(row['strike']),
-            T=float(row['T']),
-            r=r,
-            q=q,
-            sigma=float(row['impliedVolatility']),
-            option_type=row['optionType']
-        )
-        for _, row in chain.iterrows()
-    ]
-    chain['gamma'] = gammas
+    chain['gamma'] = baw_gamma_batch(
+        S=spot,
+        K=chain['strike'].to_numpy(dtype=float),
+        T=chain['T'].to_numpy(dtype=float),
+        r=r,
+        q=q,
+        sigma=chain['impliedVolatility'].to_numpy(dtype=float),
+        is_call=(chain['optionType'] == 'call').to_numpy(),
+    )
 
     # ── GEX 計算 ──────────────────────────────────────────────
     # GEX = OI × Γ × contract_size × S² × 0.01

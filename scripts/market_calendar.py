@@ -18,6 +18,7 @@ NYSE営業日判定の共通ロジック。
 import os
 import logging
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 
 
 EFFECTIVE_DATE_FILE = "data/effective_date.txt"
@@ -57,8 +58,12 @@ def _easter(year: int) -> date:
     return date(year, month, day)
 
 
+@lru_cache(maxsize=None)
 def nyse_holidays(year: int) -> set[str]:
-    """指定年のNYSE休場日セットを返す（ISO形式文字列）。"""
+    """指定年のNYSE休場日セットを返す（ISO形式文字列）。
+
+    年単位で結果をキャッシュする（純粋関数のため安全）。
+    """
     h = {
         _observed_holiday(year, 1, 1).isoformat(),   # New Year's Day
         _nth_weekday(year, 1, 0, 3).isoformat(),      # MLK Day
