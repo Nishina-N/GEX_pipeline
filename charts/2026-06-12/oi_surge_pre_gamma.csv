@@ -1,0 +1,4 @@
+symbol,spot_price,bullish_score,call_oi_change_pct,total_oi_change_pct,total_oi,call_oi,put_oi,pcr,otm_call_ratio,totalGEX,gamma_sentiment,gex_applicable,surge_pattern
+GILD,125.59,74.12,35.29,21.44,93117,66619,26498,0.3978,0.9328,5893472.0577718625,negative_gamma,insufficient,pre_breakout
+SW,43.32,73.3,33.26,28.8,28605,25645,2960,0.1154,0.9198,4740180.013952017,positive_gamma,insufficient,breakout_momentum
+ADBE,204.02,62.9,19.24,17.32,379099,228398,150701,0.6598,0.9675,-30671582.831418708,positive_gamma,insufficient,breakout_momentum
