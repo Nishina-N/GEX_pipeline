@@ -41,6 +41,7 @@ OPTIONS_DIR  = os.path.join(DATA_FOLDER, "options")
 GEX_DIR      = os.path.join(DATA_FOLDER, "gex")
 LEVELS_DIR   = os.path.join(DATA_FOLDER, "levels")
 IV_HIST_DIR  = os.path.join(DATA_FOLDER, "iv_history")
+CHARTS_DIR   = os.path.join(DATA_FOLDER, "charts")
 
 MAX_WORKERS = 5
 
@@ -441,6 +442,71 @@ def upload_gex_metrics(s3_client, date_str):
 
 
 # ─────────────────────────────────────────────────────────────
+# 新規: チャート PNG（visualize 後に実行）
+# ─────────────────────────────────────────────────────────────
+
+def upload_charts(s3_client, date_str):
+    """
+    data/charts/{symbol}_gex.png を R2 の
+    charts/{date}/{date}_{symbol}_gex.png にアップロードする。
+
+    Obsidian の attachments に置いても衝突しないよう、
+    ファイル名に日付プレフィックスを付与する。
+    """
+    if not os.path.exists(CHARTS_DIR):
+        logging.warning(f"Charts dir not found: {CHARTS_DIR}")
+        return 0, 0
+
+    success, fail = 0, 0
+    for fname in os.listdir(CHARTS_DIR):
+        if not fname.endswith('.png'):
+            continue
+        local_path = os.path.join(CHARTS_DIR, fname)
+        s3_key = f"charts/{date_str}/{date_str}_{fname}"
+        for attempt in range(3):
+            try:
+                s3_client.upload_file(
+                    local_path, R2_BUCKET_NAME, s3_key,
+                    ExtraArgs={'ContentType': 'image/png'}
+                )
+                logging.info(f"  ✅ {s3_key}")
+                success += 1
+                break
+            except Exception as e:
+                if attempt == 2:
+                    logging.error(f"  ❌ {s3_key}: {e}")
+                    fail += 1
+                else:
+                    logging.warning(f"Retry {attempt + 1}/3 for {s3_key}: {e}")
+    return success, fail
+
+
+def upload_charts_only():
+    """
+    チャート PNG のみを R2 にアップロードする（visualize 後の専用ステップ用）。
+    チャートは step5(main) より後に描画されるため、別エントリで実行する。
+    """
+    if not all([R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME]):
+        logging.error("R2 credentials not found in .env")
+        return False
+
+    date_str = get_pipeline_date()
+    s3 = create_s3_client()
+
+    logging.info("=" * 60)
+    logging.info("UPLOAD CHARTS TO R2")
+    logging.info("=" * 60)
+
+    s, f = upload_charts(s3, date_str)
+    s3.close()
+
+    logging.info("=" * 60)
+    logging.info(f"Charts: ✅ {s} uploaded, ❌ {f} failed")
+    logging.info("=" * 60)
+    return f == 0
+
+
+# ─────────────────────────────────────────────────────────────
 # クリーンアップ
 # ─────────────────────────────────────────────────────────────
 
@@ -572,7 +638,13 @@ def main():
 
 
 if __name__ == "__main__":
-    if main():
-        sys.exit(0)
-    else:
-        sys.exit(1)
+    import argparse
+    parser = argparse.ArgumentParser(description="Upload GEX data to R2")
+    parser.add_argument(
+        '--charts-only', action='store_true',
+        help='チャートPNGのみをR2にアップロード（visualize後の専用ステップ用）'
+    )
+    args = parser.parse_args()
+
+    ok = upload_charts_only() if args.charts_only else main()
+    sys.exit(0 if ok else 1)
