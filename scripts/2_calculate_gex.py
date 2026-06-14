@@ -192,51 +192,55 @@ def baw_gamma_batch(S, K, T, r, q, sigma, is_call):
     if K.size == 0:
         return np.zeros(0, dtype=float)
 
-    sigma = np.maximum(sigma, 0.001)
-    T = np.maximum(T, 1.0 / 365)
-    b = r - q
-    dS = S * 0.001
+    # np.where は両枝を評価するため、inf 臨界価格や非アクティブ枝で
+    # 一時的に invalid/divide/overflow が発生する（最終値は正しく上書きされる）。
+    # 結果に影響しない警告なので、この数値カーネル内では全て抑制する。
+    with np.errstate(all='ignore'):
+        sigma = np.maximum(sigma, 0.001)
+        T = np.maximum(T, 1.0 / 365)
+        b = r - q
+        dS = S * 0.001
 
-    deep_otm = np.abs(np.log(S / K)) / (sigma * np.sqrt(T)) > 5.0
+        deep_otm = np.abs(np.log(S / K)) / (sigma * np.sqrt(T)) > 5.0
 
-    q1, q2 = _baw_q_params_vec(T, r, q, sigma)
+        q1, q2 = _baw_q_params_vec(T, r, q, sigma)
 
-    # 臨界価格をコール/プット別に求解
-    S_crit = np.empty(K.shape, dtype=float)
-    call_mask = is_call
-    put_mask = ~is_call
+        # 臨界価格をコール/プット別に求解
+        S_crit = np.empty(K.shape, dtype=float)
+        call_mask = is_call
+        put_mask = ~is_call
 
-    if call_mask.any():
-        if b >= r:
-            # 配当なしコール: 早期行使は最適でない → 純BSガンマ（プレミアム=0）
-            S_crit[call_mask] = np.inf
-        else:
-            S0 = np.maximum(
-                K[call_mask] * (1.0 + sigma[call_mask] * np.sqrt(T[call_mask])),
-                K[call_mask] * 1.001
+        if call_mask.any():
+            if b >= r:
+                # 配当なしコール: 早期行使は最適でない → 純BSガンマ（プレミアム=0）
+                S_crit[call_mask] = np.inf
+            else:
+                S0 = np.maximum(
+                    K[call_mask] * (1.0 + sigma[call_mask] * np.sqrt(T[call_mask])),
+                    K[call_mask] * 1.001
+                )
+                S_crit[call_mask] = _newton_vec(
+                    S0, K[call_mask], T[call_mask], b, r, sigma[call_mask],
+                    q2[call_mask], is_call=True
+                )
+
+        if put_mask.any():
+            S0 = K[put_mask] * np.maximum(0.5, 1.0 - sigma[put_mask] * np.sqrt(T[put_mask]))
+            S0 = np.minimum(S0, K[put_mask] * 0.999)
+            S0 = np.maximum(S0, K[put_mask] * 0.001)
+            S_crit[put_mask] = _newton_vec(
+                S0, K[put_mask], T[put_mask], b, r, sigma[put_mask],
+                q1[put_mask], is_call=False
             )
-            S_crit[call_mask] = _newton_vec(
-                S0, K[call_mask], T[call_mask], b, r, sigma[call_mask],
-                q2[call_mask], is_call=True
-            )
 
-    if put_mask.any():
-        S0 = K[put_mask] * np.maximum(0.5, 1.0 - sigma[put_mask] * np.sqrt(T[put_mask]))
-        S0 = np.minimum(S0, K[put_mask] * 0.999)
-        S0 = np.maximum(S0, K[put_mask] * 0.001)
-        S_crit[put_mask] = _newton_vec(
-            S0, K[put_mask], T[put_mask], b, r, sigma[put_mask],
-            q1[put_mask], is_call=False
-        )
+        # 3 点評価（S_crit / q1 / q2 を共有）
+        V_up = _baw_price_given_critical_vec(S + dS, K, T, b, r, sigma, q1, q2, S_crit, is_call)
+        V_mid = _baw_price_given_critical_vec(S, K, T, b, r, sigma, q1, q2, S_crit, is_call)
+        V_dn = _baw_price_given_critical_vec(S - dS, K, T, b, r, sigma, q1, q2, S_crit, is_call)
 
-    # 3 点評価（S_crit / q1 / q2 を共有）
-    V_up = _baw_price_given_critical_vec(S + dS, K, T, b, r, sigma, q1, q2, S_crit, is_call)
-    V_mid = _baw_price_given_critical_vec(S, K, T, b, r, sigma, q1, q2, S_crit, is_call)
-    V_dn = _baw_price_given_critical_vec(S - dS, K, T, b, r, sigma, q1, q2, S_crit, is_call)
-
-    gamma = (V_up - 2.0 * V_mid + V_dn) / (dS ** 2)
-    gamma = np.maximum(gamma, 0.0)          # ガンマは非負
-    gamma = np.where(deep_otm, 0.0, gamma)  # 深いOTMは 0
+        gamma = (V_up - 2.0 * V_mid + V_dn) / (dS ** 2)
+        gamma = np.maximum(gamma, 0.0)          # ガンマは非負
+        gamma = np.where(deep_otm, 0.0, gamma)  # 深いOTMは 0
     return gamma
 
 
