@@ -1,9 +1,10 @@
 """
 7_generate_note_article.py
 
-2部構成の記事を生成する:
-  Part 1: コア5銘柄（SPY/QQQ/SMH/IWM/NVDA）― 前日比較あり・詳細分析
-  Part 2: OIスクリーニング急増銘柄 TOP5（γ量上位5件）― 簡易紹介
+3部構成の記事を生成する:
+  Part 1: 指数（SPY/QQQ/IWM/SMH）― 前日比較あり・詳細分析
+  Part 2: M7（AAPL/MSFT/GOOGL/AMZN/NVDA/META/TSLA）― 前日比較あり・詳細分析
+  Part 3: OIスクリーニング急増銘柄 TOP5（γ量上位5件）― 簡易紹介
 """
 
 import os
@@ -21,8 +22,12 @@ from market_calendar import get_previous_market_day, get_pipeline_date
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# コア銘柄（常時詳細分析・前日比較対象）
-CORE_SYMBOLS = ['SPY', 'QQQ', 'SMH', 'IWM', 'NVDA']
+# 指数（常時詳細分析・前日比較対象）
+INDEX_SYMBOLS = ['SPY', 'QQQ', 'IWM', 'SMH']
+# M7（常時詳細分析・前日比較対象）
+M7_SYMBOLS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA']
+# 詳細分析の全対象（OI急増側から除外する銘柄）
+FEATURED_SYMBOLS = INDEX_SYMBOLS + M7_SYMBOLS
 
 GEX_DIR = Path("data/r2/gex/daily")
 CHART_DIR_ROOT = Path("charts")
@@ -35,9 +40,9 @@ SCREENER_CONFIG_PATH = Path("config/screener_config.json")
 
 # ── 銘柄リスト取得 ──────────────────────────────────────────────────────────
 
-def get_oi_surge_symbols(core_symbols: list[str]) -> list[str]:
+def get_oi_surge_symbols(featured_symbols: list[str]) -> list[str]:
     """
-    symbols_oi_surge.json からコア銘柄・ETFを除いた全銘柄を返す。
+    symbols_oi_surge.json から詳細分析対象（指数・M7）・ETFを除いた全銘柄を返す。
     ETFリストは screener_config.json の output.etf_symbols から読み込む。
     上位N件への絞り込みは GEX データ読み込み後に |totalGEX| 降順で行う。
     ファイルが存在しない場合は空リストを返す。
@@ -63,7 +68,7 @@ def get_oi_surge_symbols(core_symbols: list[str]) -> list[str]:
             data = json.load(f)
         # gamma フィルタ適用済みの symbols リストを参照
         all_symbols = data.get("symbols", [])
-        surge = [s for s in all_symbols if s not in core_symbols and s not in etf_symbols]
+        surge = [s for s in all_symbols if s not in featured_symbols and s not in etf_symbols]
         if data.get("gamma_filter_applied"):
             removed = data.get("gamma_filter_removed", [])
             logging.info(f"Gamma filter was applied. Removed symbols: {removed}")
@@ -204,18 +209,26 @@ def build_comparison_summary(symbol: str, today_data: dict, yesterday_data: dict
 
 def build_prompt(
     date_str: str,
-    core_data: dict[str, dict],
+    index_data: dict[str, dict],
+    m7_data: dict[str, dict],
     oi_surge_data: dict[str, dict],
     yesterday_data: dict[str, dict] | None,
     chart_dir: str,
 ) -> str:
-    core_symbols = list(core_data.keys())
+    index_symbols = list(index_data.keys())
+    m7_symbols = list(m7_data.keys())
     surge_symbols = list(oi_surge_data.keys())
 
-    # コア銘柄：詳細サマリー（前日比較あり）
-    core_summaries = "\n\n".join(
-        build_comparison_summary(sym, core_data[sym], yesterday_data)
-        for sym in core_symbols
+    # 指数：詳細サマリー（前日比較あり）
+    index_summaries = "\n\n".join(
+        build_comparison_summary(sym, index_data[sym], yesterday_data)
+        for sym in index_symbols
+    )
+
+    # M7：詳細サマリー（前日比較あり）
+    m7_summaries = "\n\n".join(
+        build_comparison_summary(sym, m7_data[sym], yesterday_data)
+        for sym in m7_symbols
     )
 
     # OI急増銘柄：簡易サマリー
@@ -238,21 +251,33 @@ def build_prompt(
         comparison_instruction = f"""
 # 前日比較（{prev_day}）
 
-コア銘柄について前日からの主要変化を分析し記事に反映してください:
+指数・M7銘柄について前日からの主要変化を分析し記事に反映してください:
 - GEX・HVL・Wall レベルの変化とその意味
 - センチメント（ポジティブγ・ネガティブγ）の変化
 - 市場構造の変化（安定 → 不安定、またはその逆）
 """
 
-    all_symbols_for_title = core_symbols + surge_symbols
+    all_symbols_for_title = index_symbols + m7_symbols + surge_symbols
+
+    # 用語説明（各一覧の直後に共通で挿入する定型文）
+    glossary = (
+        "> Spot: 現在価格　／　GEX: ガンマエクスポージャー合計　／　"
+        "HVL: 高ボラティリティレベル（GEXゼロクロス点）　／　"
+        "CW: コールウォール（上値抵抗）　／　PW: プットウォール（下値支持）　／　"
+        "＋γ: ポジティブガンマ（安定圏）　／　−γ: ネガティブガンマ（不安定圏）"
+    )
 
     return f"""あなたはオプショントレーダー向けのGEX（ガンマ・エクスポージャー）レポートを執筆するアナリストです。
 
 以下のGEXデータをもとに、note.com投稿用の日本語記事を生成してください。
 
-# コア銘柄データ（{date_str}）
+# 指数データ（{date_str}）
 
-{core_summaries}{comparison_instruction}{surge_section}
+{index_summaries}
+
+# M7データ（{date_str}）
+
+{m7_summaries}{comparison_instruction}{surge_section}
 
 # 記事の要件
 
@@ -260,12 +285,15 @@ def build_prompt(
 2. **文体**: 簡潔・客観的。推奨トレードや投資助言は一切含めない。
 3. **構成**（この順番で）:
 
-   ### Part 1: コア銘柄分析（{', '.join(core_symbols)}）
+   ### 冒頭（全体）
 
    - **タイトル行（H1）**: 「【GEXレポート】{date_str} — {' '.join(all_symbols_for_title)}」
    - **## 本日のTopics**（80字程度）: 前日比較で最も注目すべき変化を1〜2点で簡潔に
-   - **## 今日の市場サマリー**（200字程度）: コア銘柄全体のセンチメント傾向と注目点
-   - **## 銘柄別GEX一覧**（コア銘柄のみ）: 箇条書き1銘柄1行
+   - **## 今日の市場サマリー**（200字程度）: 指数・M7全体のセンチメント傾向と注目点
+
+   ### Part 1: 指数分析（{', '.join(index_symbols)}）
+
+   - **## 指数別GEX一覧**（指数のみ）: 箇条書き1銘柄1行
      ```
      - **SPY**　＋γ（安定）｜Spot 560.12｜GEX +1.38B｜HVL 558.00｜CW 570.00｜PW 545.00
      - **QQQ**　−γ（不安定）｜Spot 472.30｜GEX -421M｜HVL 475.00｜CW 480.00｜PW 460.00
@@ -273,32 +301,39 @@ def build_prompt(
      - Markdownテーブル・KaTeX・HTMLタグは**使用しないこと**
      - 区切りは全角縦棒（｜）を使うこと
      - 箇条書きの直後に以下の用語説明を**そのまま**挿入すること（変更・省略不可）:
-       > Spot: 現在価格　／　GEX: ガンマエクスポージャー合計　／　HVL: 高ボラティリティレベル（GEXゼロクロス点）　／　CW: コールウォール（上値抵抗）　／　PW: プットウォール（下値支持）　／　＋γ: ポジティブガンマ（安定圏）　／　−γ: ネガティブガンマ（不安定圏）
-   - **各コア銘柄の詳細セクション**（銘柄順）:
+       {glossary}
+   - **各指数の詳細セクション**（銘柄順）:
      - 先頭に画像マーカー: `![SPY]({chart_dir}/SPY_gex.png)` のようにSYMBOL部分を実際の銘柄名に置換
      - スポット価格とHVLの位置関係
      - Transition Zone（Call Wall〜Put Wall）の意味
      - 短期と長期のHVL・Wall比較
      - 前日からの変化があれば必ず言及
-   - **## 前日からの変化**（前日データあり時のみ）: 主要変化を2〜3銘柄でハイライト
-   - **## まとめ**: 全体の相場環境を2〜3文で締める
 
-   ### Part 2: 注目のOI急増銘柄（昨日のスクリーニング結果）
+   ### Part 2: M7分析（{', '.join(m7_symbols)}）
+
+   - **## M7銘柄のGEX一覧**（M7のみ）: 指数一覧と同じフォーマットで箇条書き1銘柄1行
+     - 箇条書き直後に同じ用語説明を挿入（上記と同じもの）
+   - **各M7銘柄の詳細セクション**（銘柄順）:
+     - 先頭に画像マーカー: `![AAPL]({chart_dir}/AAPL_gex.png)` のようにSYMBOL部分を実際の銘柄名に置換
+     - 指数と同等の詳細（Spot/HVLの位置関係・Transition Zone・短期/長期比較・前日からの変化）
+
+   ### Part 3: 注目のOI急増銘柄（昨日のスクリーニング結果）
 
    ※ OI急増銘柄データが提供されている場合のみ記載。なければこのセクションを省略。
 
    - **## 注目のOI急増銘柄**（セクションヘッダー）
      - 冒頭1〜2文でスクリーニング背景を簡潔に説明（OI急増銘柄とは何か・なぜ注目するか）
-     - 各銘柄を箇条書き1行で紹介（コア銘柄一覧と同じフォーマット）
+     - 各銘柄を箇条書き1行で紹介（指数一覧と同じフォーマット）
      - 箇条書き直後に同じ用語説明を挿入（上記と同じもの）
    - **各OI急増銘柄の詳細セクション**（銘柄順）:
-     - 先頭に画像マーカー: `![SPY]({chart_dir}/SPY_gex.png)` のようにSYMBOL部分を実際の銘柄名に置換
+     - 先頭に画像マーカー: `![SYMBOL]({chart_dir}/SYMBOL_gex.png)` のようにSYMBOL部分を実際の銘柄名に置換
      - 銘柄ごとに2〜3文の簡易コメント（センチメント・HVLとSpotの位置関係・Wall情報）
      - 詳細な時系列分析や前日比較は不要
 
-
    ### 共通フッター
 
+   - **## 前日からの変化**（前日データあり時のみ）: 指数・M7の主要変化を2〜3銘柄でハイライト
+   - **## まとめ**: 全体の相場環境を2〜3文で締める
    - **## 注記**: 「本記事はGEXデータに基づく分析であり、GEX計算にはBAW（Barone-Adesi Whaley）モデルを使用しています。本記事はAIの補助を用いて作成しており、投資の推奨や助言ではありません。」
 
 4. **数値**: データの数値をそのまま使用（四捨五入OK、小数点1〜2桁）。
@@ -339,7 +374,7 @@ def generate_article(prompt: str) -> dict:
     logging.info(f"Calling Claude API ({MODEL})...")
     create_kwargs = dict(
         model=MODEL,
-        max_tokens=8000,
+        max_tokens=16000,   # 指数4＋M7 7＋OI急増5 の3部構成で記事が長くなるため拡大
         messages=[{"role": "user", "content": prompt}]
     )
     if guideline:
@@ -369,17 +404,20 @@ def main():
     today = get_pipeline_date()
 
     # 銘柄リスト決定
-    core_symbols = CORE_SYMBOLS
-    oi_surge_symbols_all = get_oi_surge_symbols(core_symbols)
-    logging.info(f"Core symbols: {core_symbols}")
+    index_symbols = INDEX_SYMBOLS
+    m7_symbols = M7_SYMBOLS
+    oi_surge_symbols_all = get_oi_surge_symbols(FEATURED_SYMBOLS)
+    logging.info(f"Index symbols: {index_symbols}")
+    logging.info(f"M7 symbols: {m7_symbols}")
     logging.info(f"OI surge symbols (all): {oi_surge_symbols_all}")
 
-    # 当日GEXデータ読み込み
-    core_data = load_gex_data(today, core_symbols)
-    if not core_data:
-        logging.error("No core GEX data found")
+    # 当日GEXデータ読み込み（指数・M7）
+    index_data = load_gex_data(today, index_symbols)
+    m7_data = load_gex_data(today, m7_symbols)
+    if not index_data and not m7_data:
+        logging.error("No index/M7 GEX data found")
         sys.exit(1)
-    logging.info(f"Loaded core data for {len(core_data)} symbols")
+    logging.info(f"Loaded index data for {len(index_data)} / M7 data for {len(m7_data)} symbols")
 
     oi_surge_data: dict[str, dict] = {}
     oi_surge_symbols: list[str] = []
@@ -396,13 +434,13 @@ def main():
         oi_surge_symbols = list(oi_surge_data.keys())
         logging.info(f"Loaded OI surge data for {len(oi_surge_data)} symbols (top {OI_SURGE_TOP_N} by |totalGEX|): {oi_surge_symbols}")
 
-    # 前日データ（コア銘柄のみ）
+    # 前日データ（指数・M7）
     yesterday_data: dict[str, dict] | None = None
     prev_day = get_previous_market_day(today)
     if prev_day:
-        yesterday_data = load_gex_data(prev_day, core_symbols, optional=True)
+        yesterday_data = load_gex_data(prev_day, FEATURED_SYMBOLS, optional=True)
         if yesterday_data:
-            logging.info(f"Comparison data available for {len(yesterday_data)} core symbols ({prev_day})")
+            logging.info(f"Comparison data available for {len(yesterday_data)} featured symbols ({prev_day})")
         else:
             logging.warning(f"No previous day data found: {prev_day}")
     else:
@@ -412,7 +450,7 @@ def main():
     chart_dir = str(CHART_DIR_ROOT / today)
 
     # プロンプト構築・記事生成
-    prompt = build_prompt(today, core_data, oi_surge_data, yesterday_data, chart_dir)
+    prompt = build_prompt(today, index_data, m7_data, oi_surge_data, yesterday_data, chart_dir)
 
     try:
         result = generate_article(prompt)
@@ -431,7 +469,8 @@ def main():
         "title": result["title"],
         "tags": result["tags"],
         "date": today,
-        "core_symbols": core_symbols,
+        "index_symbols": index_symbols,
+        "m7_symbols": m7_symbols,
         "oi_surge_symbols": oi_surge_symbols,
         "chart_dir": chart_dir,
         "has_comparison_data": bool(yesterday_data),
