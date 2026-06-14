@@ -269,14 +269,6 @@ def fetch_oi_snapshot(symbol: str, config: dict) -> dict | None:
 
     try:
         ticker = yf.Ticker(symbol)
-        info   = ticker.info
-        spot   = (
-            info.get("regularMarketPrice")
-            or info.get("currentPrice")
-            or info.get("previousClose")
-        )
-        if not spot:
-            return None
 
         expirations = ticker.options
         if not expirations:
@@ -288,6 +280,7 @@ def fetch_oi_snapshot(symbol: str, config: dict) -> dict | None:
         if not valid_exp:
             return None
 
+        spot          = None
         total_call_oi = 0
         total_put_oi  = 0
         otm_call_oi   = 0
@@ -295,20 +288,40 @@ def fetch_oi_snapshot(symbol: str, config: dict) -> dict | None:
         for exp in valid_exp:
             try:
                 chain = ticker.option_chain(exp)
-                calls = chain.calls
-                puts  = chain.puts
-
-                c_oi = int(calls["openInterest"].fillna(0).sum())
-                p_oi = int(puts["openInterest"].fillna(0).sum())
-                total_call_oi += c_oi
-                total_put_oi  += p_oi
-
-                # OTM Call: strike > spot * otm_buf
-                otm_mask = calls["strike"] > (spot * otm_buf)
-                otm_call_oi += int(calls.loc[otm_mask, "openInterest"].fillna(0).sum())
-
             except Exception:
                 continue
+            calls = chain.calls
+            puts  = chain.puts
+
+            # spot は最初に取得できた option_chain の underlying から取る
+            # （別途 ticker.info を叩かずに済む。値は info と一致）。
+            if spot is None:
+                und = getattr(chain, "underlying", None)
+                if isinstance(und, dict):
+                    spot = (
+                        und.get("regularMarketPrice")
+                        or und.get("currentPrice")
+                        or und.get("previousClose")
+                    )
+                if not spot:
+                    # フォールバック: 従来どおり info から取得（カバレッジ維持）
+                    info = ticker.info
+                    spot = (
+                        info.get("regularMarketPrice")
+                        or info.get("currentPrice")
+                        or info.get("previousClose")
+                    )
+                if not spot:
+                    return None
+
+            c_oi = int(calls["openInterest"].fillna(0).sum())
+            p_oi = int(puts["openInterest"].fillna(0).sum())
+            total_call_oi += c_oi
+            total_put_oi  += p_oi
+
+            # OTM Call: strike > spot * otm_buf
+            otm_mask = calls["strike"] > (spot * otm_buf)
+            otm_call_oi += int(calls.loc[otm_mask, "openInterest"].fillna(0).sum())
 
         total_oi = total_call_oi + total_put_oi
         if total_oi == 0:
