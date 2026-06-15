@@ -94,6 +94,16 @@ jobs:
         run: python scripts/visualize_gex.py
         timeout-minutes: 5
 
+      - name: 6. Upload charts to R2
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: python scripts/5_upload_to_r2.py --charts-only
+        continue-on-error: true
+        timeout-minutes: 5
+
       - name: 7. Commit charts to GitHub
         run: |
           DATE=$(cat data/effective_date.txt 2>/dev/null || date +%Y-%m-%d)
