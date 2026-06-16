@@ -20,8 +20,29 @@ import logging
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 
+try:
+    from zoneinfo import ZoneInfo
+    _MARKET_TZ = ZoneInfo("America/New_York")
+except Exception:  # pragma: no cover - tzdata 未導入環境のフォールバック
+    _MARKET_TZ = None
+
 
 EFFECTIVE_DATE_FILE = "data/effective_date.txt"
+
+
+def market_today() -> str:
+    """
+    米国東部時間（NYSE基準）での「今日」を YYYY-MM-DD で返す。
+
+    パイプラインは米国引け直後（ET夕方）に走るため、セッション日は ET の日付で決まる。
+    実行が UTC 深夜0時をまたいでも（例: 00:08 UTC = 前日 20:08 ET）、
+    ET基準なら正しいセッション日を返す。
+    """
+    if _MARKET_TZ is not None:
+        return datetime.now(_MARKET_TZ).strftime("%Y-%m-%d")
+    # tzdata が無い環境向けフォールバック: UTC-4/5 概算ではなく UTC をそのまま使う
+    logging.warning("[market_calendar] zoneinfo/tzdata unavailable; falling back to UTC date")
+    return datetime.utcnow().strftime("%Y-%m-%d")
 
 
 def _observed_holiday(year: int, month: int, day: int) -> date:
@@ -114,7 +135,7 @@ def get_effective_market_date(base_date: str | None = None) -> str:
       月曜（祝日）: 前の金曜を返す
     """
     if base_date is None:
-        base_date = date.today().isoformat()
+        base_date = market_today()
     if is_market_day(base_date):
         return base_date
     prev = get_previous_market_day(base_date)

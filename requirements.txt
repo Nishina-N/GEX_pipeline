@@ -7,3 +7,4 @@ boto3>=1.28.0
 python-dotenv>=1.0.0
 matplotlib>=3.7.0
 anthropic>=0.25.0
+tzdata>=2024.1

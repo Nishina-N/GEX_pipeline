@@ -36,7 +36,7 @@ import boto3
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 
-from market_calendar import get_previous_market_day
+from market_calendar import get_previous_market_day, get_effective_market_date
 
 load_dotenv()
 
@@ -603,7 +603,9 @@ def write_output(symbols: list[str], ranked: list[dict], date_str: str) -> None:
 
 def _main_impl(args) -> bool:
     config   = load_screener_config()
-    date_str = args.date or datetime.now().strftime("%Y-%m-%d")
+    # 日付は ET（NYSE基準）の有効営業日を使う。UTC壁時計だと深夜0時跨ぎで
+    # セッション日が +1 ずれ、前日比較が壊れるため（market_calendar に一元化）。
+    date_str = args.date or get_effective_market_date()
     # 前営業日を取得（月曜日の場合は金曜日、祝日も考慮）
     yesterday_str = get_previous_market_day(date_str)
     if yesterday_str is None:
@@ -700,7 +702,7 @@ def main(args) -> bool:
         try:
             config  = load_screener_config()
             always  = config["output"].get("always_include", DEFAULT_SYMBOLS)
-            date_str = args.date or datetime.now().strftime("%Y-%m-%d")
+            date_str = args.date or get_effective_market_date()
             write_output(always, [], date_str)
         except Exception:
             pass
