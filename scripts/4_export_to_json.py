@@ -10,6 +10,8 @@ import json
 import logging
 from datetime import datetime
 
+from market_calendar import get_pipeline_date
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -37,7 +39,7 @@ def main():
     # 日付の取得（最初のファイルから）
     with open(os.path.join(LEVELS_DIR, json_files[0]), 'r') as f:
         sample = json.load(f)
-    date_str = sample.get('date', datetime.now().strftime('%Y-%m-%d'))
+    date_str = sample.get('date') or get_pipeline_date()
 
     # R2 出力ディレクトリ
     output_dir = os.path.join(R2_OUTPUT, "gex", "daily", date_str)
