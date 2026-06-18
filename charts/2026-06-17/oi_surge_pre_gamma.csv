@@ -1,0 +1,10 @@
+symbol,spot_price,bullish_score,call_oi_change_pct,total_oi_change_pct,total_oi,call_oi,put_oi,pcr,otm_call_ratio,totalGEX,gamma_sentiment,gex_applicable,surge_pattern
+FOXA,51.32,84.11,64.67,46.78,24176,15512,8664,0.5585,0.7357,152997.98376140208,positive_gamma,insufficient,breakout_momentum
+CSX,45.57,71.24,28.11,23.45,322659,267070,55589,0.2081,0.9274,32770557.90040984,negative_gamma,insufficient,pre_breakout
+KHC,23.2,70.12,25.31,17.29,207554,150254,57300,0.3814,0.9411,5432139.0047917105,negative_gamma,insufficient,pre_breakout
+JBL,374.98,69.38,36.87,37.14,25735,15329,10406,0.6788,0.7557,-4954597.890070776,positive_gamma,insufficient,breakout_momentum
+PSKY,9.98,63.23,13.79,10.1,245220,155578,89642,0.5762,0.9203,-437194.17559162737,negative_gamma,insufficient,pre_breakout
+HST,24.62,62.24,107.48,18.56,41438,12513,28925,2.3116,0.519,-316015.99977349216,positive_gamma,insufficient,breakout_momentum
+CMCSA,22.69,59.46,-1.25,12.06,489082,322164,166918,0.5181,0.9882,-1266966.113224395,negative_gamma,insufficient,pre_breakout
+MMM,159.23,52.59,28.96,17.34,96334,47435,48899,1.0309,0.6285,7635792.164753818,positive_gamma,insufficient,breakout_momentum
+FISV,48.77,50.66,3.23,19.74,154353,83232,71121,0.8545,0.9496,-3763559.9486081116,positive_gamma,insufficient,breakout_momentum
