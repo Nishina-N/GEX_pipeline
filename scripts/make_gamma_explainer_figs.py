@@ -26,7 +26,7 @@ def fig_flip():
     ax.axhspan(5, 10, color=GREEN, alpha=0.10)
     ax.axhspan(0, 5, color=RED, alpha=0.10)
     ax.axhline(5, color=INK, ls="--", lw=2)
-    ax.text(9.8, 5.15, "HVL（ガンマフリップ）", ha="right", va="bottom",
+    ax.text(0.2, 5.15, "HVL（ガンマフリップ）", ha="left", va="bottom",
             fontsize=12, color=INK, fontweight="bold")
 
     # Call Wall / Put Wall
@@ -45,7 +45,8 @@ def fig_flip():
 
     ax.annotate("", xy=(7.2, 9.2), xytext=(7.2, 0.8),
                 arrowprops=dict(arrowstyle="<->", color=INK, lw=1.5))
-    ax.text(7.45, 5, "価\n格", va="center", fontsize=11, color=INK)
+    ax.text(7.5, 5, "価格（上ほど高い）", rotation=90, ha="left", va="center",
+            fontsize=10, color=INK)
 
     ax.set_xlim(0, 10); ax.set_ylim(0, 10)
     ax.set_xticks([]); ax.set_yticks([])
@@ -127,33 +128,47 @@ def fig_hedge_direction():
 
 # ── 図4: 3段階（満期）計算のしくみ ───────────────────────────────
 def fig_three_stage():
-    fig, ax = plt.subplots(figsize=(10, 5.5))
-    # タイムライン
-    ax.axhline(0.5, color=INK, lw=2)
-    ax.text(0.0, 0.57, "今日", fontsize=11, ha="left")
-    # 満期の点
+    fig, ax = plt.subplots(figsize=(10, 5.6))
+    base = 0.80
+    # タイムライン（今日 → 満期）
+    ax.axhline(base, color=INK, lw=2)
+    ax.text(0.0, base + 0.05, "今日", fontsize=11, ha="left")
+    ax.text(1.0, base + 0.02, "満期 →", ha="right", va="bottom", fontsize=10)
     days = [2, 5, 9, 16, 23, 51, 79]   # DTE 例
     for d in days:
-        xpos = d / 90
-        ax.plot(xpos, 0.5, "o", color=INK, ms=7)
+        ax.plot(d / 90, base, "o", color=INK, ms=6)
+    sq = [16, 51]   # 次の2回の月次SQ（第3金曜）の例
+
+    # 短期：緑の矢印（タイムライン直下）
+    y_s = 0.62
+    ax.annotate("", xy=(0/90, y_s), xytext=(7/90, y_s),
+                arrowprops=dict(arrowstyle="<->", color=GREEN, lw=2.5))
+    ax.text(9/90, y_s, "短期：DTE 0〜7日（足元の圧力）", va="center",
+            color=GREEN, fontsize=10, fontweight="bold")
+
+    # 長期：黄色の矢印（緑と黒の中間）。今日〜次のSQまでを累積。SQ週は次の次のSQへロール
+    y_l = 0.44
+    ax.annotate("", xy=(sq[0]/90, y_l), xytext=(0/90, y_l),
+                arrowprops=dict(arrowstyle="<->", color=AMBER, lw=2.5))
+    ax.plot([sq[0]/90, sq[0]/90], [y_l, base], color=AMBER, ls=":", lw=1)  # 次のSQの位置
+    # ロールオーバー（SQ目前の週）：次の次のSQまで点線で延長
+    ax.annotate("", xy=(sq[1]/90, y_l), xytext=(sq[0]/90, y_l),
+                arrowprops=dict(arrowstyle="->", color=AMBER, lw=1.2, linestyle=":"))
+    ax.plot([sq[1]/90, sq[1]/90], [y_l, base], color=AMBER, ls=":", lw=1)
+    ax.text(sq[1]/90 + 0.01, y_l, "SQ目前の週は\n次の次のSQまでロール", va="center",
+            color=AMBER, fontsize=8.5)
+    ax.text((0 + sq[0]) / 2 / 90, y_l - 0.10,
+            "長期：今日〜次のSQまで累積（中期の岩盤）",
+            ha="center", va="top", color=AMBER, fontsize=10, fontweight="bold")
+
+    # 全満期：黒の矢印（最も外側）
+    y_a = 0.16
+    ax.annotate("", xy=(0/90, y_a), xytext=(79/90, y_a),
+                arrowprops=dict(arrowstyle="<->", color=INK, lw=1.8))
+    ax.text(40/90, y_a - 0.06, "全満期合算（左メインパネルのレベル線）",
+            ha="center", va="top", color=INK, fontsize=10)
+
     ax.set_xlim(-0.02, 1.0); ax.set_ylim(0, 1)
-
-    # 短期ブラケット（DTE 0-7）
-    ax.annotate("", xy=(0/90, 0.34), xytext=(7/90, 0.34),
-                arrowprops=dict(arrowstyle="<->", color=GREEN, lw=2))
-    ax.text(3.5/90, 0.22, "短期\nDTE 0〜7日\n（足元の圧力）", ha="center", color=GREEN, fontsize=10, fontweight="bold")
-
-    # 長期ブラケット（次の2回の月次SQ）
-    ax.annotate("", xy=(16/90, 0.66), xytext=(51/90, 0.66),
-                arrowprops=dict(arrowstyle="<->", color=AMBER, lw=2))
-    ax.text(33/90, 0.74, "長期：次の2回の月次SQ\n（中期的な岩盤）", ha="center", color=AMBER, fontsize=10, fontweight="bold")
-
-    # 全満期
-    ax.annotate("", xy=(0/90, 0.10), xytext=(79/90, 0.10),
-                arrowprops=dict(arrowstyle="<->", color=INK, lw=1.5))
-    ax.text(40/90, 0.02, "左メインパネル：全満期を合算（レベル線）", ha="center", color=INK, fontsize=10)
-
-    ax.text(1.0, 0.5, "満期 →", ha="right", va="bottom", fontsize=10)
     ax.axis("off")
     ax.set_title("④ このレポートの図は『満期で3段階』に分けて計算している", fontsize=14, fontweight="bold")
     fig.tight_layout()
@@ -240,12 +255,82 @@ def fig_dynamic():
     plt.close(fig)
 
 
+# ── 図7: デルタとガンマ（なぜ売り買いの向きが決まるか） ────────────
+def fig_delta_gamma():
+    fig, ax = plt.subplots(figsize=(9, 5.8))
+    price = np.linspace(90, 110, 200)
+    delta = 1 / (1 + np.exp(-(price - 100) / 2.2))  # コールのデルタ（S字）
+    ax.plot(price, delta, color=INK, lw=3)
+
+    # 2点：価格98→102でデルタが増える
+    for p, col, lab in [(98, RED, "価格 98"), (102, GREEN, "価格 102")]:
+        d = 1 / (1 + np.exp(-(p - 100) / 2.2))
+        ax.plot([p, p], [0, d], color=col, ls=":", lw=1.5)
+        ax.plot([90, p], [d, d], color=col, ls=":", lw=1.5)
+        ax.plot(p, d, "o", color=col, ms=10)
+        ax.text(p, -0.06, lab, color=col, ha="center", fontsize=10, fontweight="bold")
+        ax.text(89.6, d, f"{d:.2f}", color=col, ha="right", va="center", fontsize=10, fontweight="bold")
+
+    ax.annotate("価格が上がると\nデルタが増える\n（＝ガンマ）", xy=(101, 0.62), xytext=(103.4, 0.33),
+                fontsize=10.5, color=INK,
+                arrowprops=dict(arrowstyle="->", color=INK, lw=1.5))
+
+    ax.text(90.2, 1.02,
+            "デルタ＝『今この株を何株分持っているのと同じか』（0〜1）\nガンマ＝価格が動いたときのデルタの変化（カーブの傾き）",
+            fontsize=10, color=INK, va="bottom")
+
+    ax.set_xlim(89, 111); ax.set_ylim(-0.12, 1.18)
+    ax.set_xlabel("株価 →", fontsize=11)
+    ax.set_ylabel("デルタ（株数の感じ）", fontsize=11)
+    ax.set_yticks([0, 0.5, 1.0])
+    ax.set_title("⑦ デルタとガンマ：価格が動くと『持っている株数の感じ』が変わる", fontsize=13, fontweight="bold")
+    fig.tight_layout()
+    fig.savefig(os.path.join(OUT, "delta_gamma.png"), dpi=130)
+    plt.close(fig)
+
+
+# ── 図7b: ＋γ と −γ でデルタの動きが逆 ───────────────────────────
+def fig_delta_pm():
+    fig, axes = plt.subplots(1, 2, figsize=(11.5, 5.2), sharey=True)
+    price = np.linspace(90, 110, 200)
+    up = 1 / (1 + np.exp(-(price - 100) / 2.2))      # ＋γ：価格↑でデルタ↑
+    down = 1 - up                                      # −γ：価格↑でデルタ↓
+
+    def panel(ax, curve, color, title, up_txt, down_txt):
+        ax.plot(price, curve, color=color, lw=3)
+        ax.axvline(100, color="#bbbbbb", ls=":", lw=1)
+        ax.annotate("", xy=(104, np.interp(104, price, curve)),
+                    xytext=(96, np.interp(96, price, curve)),
+                    arrowprops=dict(arrowstyle="->", color=color, lw=2))
+        ax.set_title(title, fontsize=13, color=color, fontweight="bold")
+        ax.text(91, 1.14, up_txt, fontsize=10.5, color=color, va="top")
+        ax.text(91, 1.04, down_txt, fontsize=10.5, color=color, va="top")
+        ax.set_xlim(89, 111); ax.set_ylim(-0.05, 1.30)
+        ax.set_xlabel("株価 →", fontsize=10)
+        ax.set_yticks([0, 0.5, 1.0])
+
+    panel(axes[0], up, GREEN, "＋γ：価格と同じ向き",
+          "価格↑ → デルタ↑ → 売る（上昇を抑える）",
+          "価格↓ → デルタ↓ → 買う（下落を支える）")
+    panel(axes[1], down, RED, "−γ：価格と逆向き（さかさま）",
+          "価格↑ → デルタ↓ → 買う（上昇を押す）",
+          "価格↓ → デルタ↑ → 売る（下落を押す）")
+    axes[0].set_ylabel("お店のデルタ（株数の感じ）", fontsize=10)
+
+    fig.suptitle("⑦b ＋γ と −γ では、価格に対するデルタの動きが逆になる", fontsize=14, fontweight="bold")
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    fig.savefig(os.path.join(OUT, "delta_pm.png"), dpi=130)
+    plt.close(fig)
+
+
 fig_flip()
 fig_bowl_hill()
 fig_hedge_direction()
 fig_three_stage()
 fig_wall_pairing()
 fig_dynamic()
+fig_delta_gamma()
+fig_delta_pm()
 print("done ->", OUT)
 for f in os.listdir(OUT):
     print(" ", f)

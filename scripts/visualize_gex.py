@@ -366,9 +366,10 @@ def create_chart(symbol, candle_limit=100):
         ['Short-term (DTE 0-7)'] +
         ([st_exps[-1]] if st_exps else ['(no data)'])
     )
+    lt_end = max(lt_exps) if lt_exps else None
     lt_title = (
-        ['Long-term (Monthly SQ)'] +
-        ([', '.join(lt_exps)] if lt_exps else ['(no data)'])
+        ['Long-term (cumulative → SQ)'] +
+        ([f'→ {lt_end}'] if lt_end else ['(no data)'])
     )
 
     draw_gex_histogram(
