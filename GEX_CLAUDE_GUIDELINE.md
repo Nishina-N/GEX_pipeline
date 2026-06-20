@@ -192,6 +192,12 @@ sentiment = 'positive_gamma' if spot_price > hvl else 'negative_gamma'
 | **Positive GEX**（Spot > HVL） | MMヘッジが価格安定に働く。低ボラ・レンジ相場になりやすい。Call Wall方向への緩やかな上昇バイアスが生じやすい |
 | **Negative GEX**（Spot < HVL） | MMヘッジがトレンドを加速させる。高ボラ・トレンド相場になりやすい。価格方向への追随圧力が強い |
 
+> ⚠️ **二値で過信しない（確信度つきで読む）**：sentiment は単一しきい値（Spot vs HVL）の二値判定なので、
+> **Spotが HVL の至近のときは小さなOI変化で容易に裏返る＝低信頼**。確信度は概ね
+> **（SpotとHVLの距離）×（|totalGEX|の厚み）** に比例する。Spotが明確にHVLから離れ |totalGEX| が厚いほど頑健、
+> 至近かつ薄いほど当てにならない。HVLは「点」でなく「割れたらボラ拡大を疑うトリガー水準」として扱い、
+> Wall位置・|totalGEX|・値動きと併せて判断する。満期接近（SQ前）はHVLが動きやすく判定がブレやすい。
+
 ---
 
 ### STEP 2: Transition Zone内でのSpot位置の確認
