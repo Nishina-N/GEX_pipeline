@@ -83,7 +83,7 @@ sentiment = 'positive_gamma' if spot_price > hvl else 'negative_gamma'
 |--------|------|--------|
 | **左パネル（メイン）** | ローソク足（過去100営業日）＋出来高＋GEXレベル水平線 | 全満期合算 |
 | **中パネル（短期）** | GEXヒストグラム（横棒グラフ） | DTE 0〜7日 |
-| **右パネル（長期）** | GEXヒストグラム（横棒グラフ） | 次の2月次SQ |
+| **右パネル（長期）** | GEXヒストグラム（横棒グラフ） | 今日〜対象の月次SQまで累積（短期も内包。対象SQ=次のSQ、ただし次のSQが目前(DTE≤7)の週は次の次のSQ） |
 
 ### 左パネルに表示されるGEXレベル線
 
@@ -169,7 +169,7 @@ transition_zone = {'lower': put_wall, 'upper': call_wall}
 | 3 | "sentimentはtotalGEXの符号で決まる" | `sentiment`はSpot価格とHVLの位置関係で決まる（`spot_price > hvl` → positive_gamma） |
 | 4 | "Call WallはPositive GEX環境のみに存在する" | Call WallはNETGEXが正のストライクの最大値。Negative GEX環境（Spot < HVL）でも存在する |
 | 5 | "チャートのsentiment表示はtotalGEXの符号" | `visualize_gex.py`の`sent_str`はJSONの`sentiment`フィールドを読む。計算はHVLとSpotの比較 |
-| 6 | "短期と長期のGEXは同一" | 短期=DTE 0〜7日の満期合算、長期=次の2月次SQ。Wall位置・HVL・強度がそれぞれ異なる |
+| 6 | "短期と長期のGEXは同一" | 短期=DTE 0〜7日の満期合算、長期=今日〜対象の月次SQまで累積（SQ目前の週は次の次のSQへロール）。Wall位置・HVL・強度がそれぞれ異なる |
 | 7 | "WallのNETGEX値は絶対値で比較できる" | ヒストグラムは各パネル内の最大絶対値で正規化されるため、短期バーと長期バーの長さは直接比較不可 |
 
 ---
@@ -243,7 +243,7 @@ Put Wall ──── [中点 = (CW + PW) / 2] ──── Call Wall
 
 ### STEP 5: 短期 vs 長期のWall位置比較
 
-**短期（DTE 0〜7日）** は足元の圧力、**長期（次の2月次SQ）** は中期的な岩盤を示します。
+**短期（DTE 0〜7日）** は足元の圧力、**長期（今日〜対象の月次SQまで累積／SQ目前の週は次の次のSQ）** は中期的な岩盤を示します。
 
 | 一致/不一致 | パターン | 解釈 |
 |-----------|---------|------|

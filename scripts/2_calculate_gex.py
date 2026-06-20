@@ -7,7 +7,8 @@ Barone-Adesi Whaley (BAW) モデルでガンマを計算し、ストライク別
 集計タイプ:
   - 全体 (gex_by_strike): 全満期の合算
   - 短期 (gex_short_term): DTE 0-7日の満期を合算
-  - 長期 (gex_long_term): 次の2つの月次SQ（第3金曜）を合算
+  - 長期 (gex_long_term): 今日〜対象の月次SQ（第3金曜）までを累積（短期も内包）。
+                          対象SQ=次のSQ。ただし次のSQが目前(DTE<=7)の週は次の次のSQへロール。
 """
 
 import os
@@ -277,24 +278,47 @@ def get_next_monthly_expirations(from_date, n=2):
     return result[:n]
 
 
+SQ_ROLLOVER_DTE = 7   # 次のSQがこの日数以内なら「次の次のSQ」へロールオーバー
+
+
+def _resolve_long_term_target_sq(today):
+    """
+    長期の終点となる月次SQを決める。
+      - 次のSQが目前（DTE <= SQ_ROLLOVER_DTE）なら、短期と潰れないよう次の次のSQ。
+      - それ以外は次のSQ。
+    戻り値: (target_sq_str or None, target_dte or None)
+    """
+    sqs = get_next_monthly_expirations(today, n=2)
+    if not sqs:
+        return None, None
+    first_dte = (datetime.strptime(sqs[0], '%Y-%m-%d').date() - today.date()).days
+    if first_dte <= SQ_ROLLOVER_DTE and len(sqs) >= 2:
+        target = sqs[1]
+    else:
+        target = sqs[0]
+    target_dte = (datetime.strptime(target, '%Y-%m-%d').date() - today.date()).days
+    return target, target_dte
+
+
 def classify_expirations(expirations, today):
     """
     満期日リストを短期・長期バケットに分類する。
 
     Returns:
         short_term (list): DTE 0-7 の満期日
-        long_term  (list): 次の2月次SQ に一致する満期日
+        long_term  (list): 今日〜対象SQ までの全満期（累積。短期も内包する）。
+                           対象SQ = 次のSQ。ただし次のSQが目前(DTE<=7)の週は次の次のSQへロール。
     """
     short_term = []
-    long_term_targets = get_next_monthly_expirations(today, n=2)
     long_term = []
+    _, target_dte = _resolve_long_term_target_sq(today)
 
     for exp in expirations:
         exp_dt = datetime.strptime(exp, '%Y-%m-%d')
         dte = (exp_dt.date() - today.date()).days
         if 0 <= dte <= 7:
             short_term.append(exp)
-        if exp in long_term_targets:
+        if target_dte is not None and 0 <= dte <= target_dte:
             long_term.append(exp)
 
     return short_term, long_term
@@ -409,7 +433,7 @@ def calculate_gex_for_symbol(options_data, config):
     short_term_exps, long_term_exps = classify_expirations(all_expirations, today)
 
     logging.info(f"[{symbol}] Short-term expirations (DTE 0-7): {short_term_exps}")
-    logging.info(f"[{symbol}] Long-term expirations (next 2 monthly SQ): {long_term_exps}")
+    logging.info(f"[{symbol}] Long-term expirations (cumulative → target SQ): {long_term_exps}")
 
     # ── 各バケットの集計 ──────────────────────────────────────
     gex_by_strike = _aggregate_gex_by_strike(chain)

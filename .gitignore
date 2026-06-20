@@ -34,3 +34,6 @@ node_modules/
 
 # note.com 記事生成（一時ファイル）
 note-article/
+
+# Claude Code agent worktrees (do not track)
+.claude/worktrees/
