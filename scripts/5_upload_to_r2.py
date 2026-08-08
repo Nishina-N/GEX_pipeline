@@ -254,72 +254,9 @@ def upload_gex_pkls(s3_client, date_str):
 
 
 # ─────────────────────────────────────────────────────────────
-# 新規: IVスナップショット（圧縮）+ IVサマリJSON
+# IVスナップショット（圧縮）+ IVサマリJSON のアップロード
+#   サマリ生成は scripts/iv_summary.py（step3 で先に呼ばれる）
 # ─────────────────────────────────────────────────────────────
-
-def _build_iv_summary(symbol, date_str, iv_df, spot_price):
-    """
-    IV DataFrame から満期別のサマリ（ATM IV・25Δスキュー等）を生成する。
-
-    25Δ近似: ATMストライクから ±σ√T 程度のストライクを参照。
-    簡略化として上位/下位 25% 分位のストライクを使用。
-    """
-    summary = {
-        'date': date_str,
-        'symbol': symbol,
-        'spotPrice': spot_price,
-        'expirations': []
-    }
-
-    if iv_df is None or iv_df.empty:
-        return summary
-
-    today = pd.Timestamp(date_str)
-
-    for exp, grp in iv_df.groupby('expiration'):
-        exp_date = pd.Timestamp(exp)
-        dte = max(0, (exp_date - today).days)
-
-        # ATM: spot に最も近いストライク
-        grp = grp.copy()
-        grp['dist'] = (grp['strike'] - spot_price).abs()
-        atm_row = grp.loc[grp['dist'].idxmin()]
-        atm_iv = float(atm_row['impliedVolatility']) if pd.notna(atm_row['impliedVolatility']) else None
-
-        # 25Δ put/call 近似: put は ATM より低い上位25%ile、call は高い上位25%ile
-        puts  = grp[grp['optionType'] == 'put'].copy()
-        calls = grp[grp['optionType'] == 'call'].copy()
-
-        put_25d_iv, call_25d_iv, skew = None, None, None
-        if not puts.empty and not calls.empty:
-            put_low_strikes = puts[puts['strike'] <= spot_price]
-            if not put_low_strikes.empty:
-                q25_put = put_low_strikes['strike'].quantile(0.75)  # 下から75% = ATMに近い25Δ側
-                row = put_low_strikes.iloc[(put_low_strikes['strike'] - q25_put).abs().argsort()[:1]]
-                put_25d_iv = float(row['impliedVolatility'].values[0]) if pd.notna(row['impliedVolatility'].values[0]) else None
-
-            call_high_strikes = calls[calls['strike'] >= spot_price]
-            if not call_high_strikes.empty:
-                q75_call = call_high_strikes['strike'].quantile(0.25)
-                row = call_high_strikes.iloc[(call_high_strikes['strike'] - q75_call).abs().argsort()[:1]]
-                call_25d_iv = float(row['impliedVolatility'].values[0]) if pd.notna(row['impliedVolatility'].values[0]) else None
-
-            if put_25d_iv is not None and call_25d_iv is not None:
-                skew = round(put_25d_iv - call_25d_iv, 4)
-
-        summary['expirations'].append({
-            'expiration': exp,
-            'dte': dte,
-            'atm_iv': round(atm_iv, 4) if atm_iv is not None else None,
-            'put_25d_iv': round(put_25d_iv, 4) if put_25d_iv is not None else None,
-            'call_25d_iv': round(call_25d_iv, 4) if call_25d_iv is not None else None,
-            'skew': skew,
-        })
-
-    # DTE 昇順でソート
-    summary['expirations'].sort(key=lambda x: x['dte'])
-    return summary
-
 
 def upload_iv_history_pkls(s3_client, date_str):
     """
@@ -354,22 +291,15 @@ def upload_iv_history_pkls(s3_client, date_str):
             fail += 1
             continue
 
-        # 2. IVサマリ JSON 生成 & アップロード
+        # 2. IVサマリ JSON アップロード
+        #    生成は step3（3_extract_levels）で済んでいる。ここに無い場合だけ作る。
         s3_key_json = f"iv_history/{symbol}/{date_str}_iv_summary.json"
         try:
-            with open(pkl_path, 'rb') as f:
-                iv_df = pickle.load(f)
-
-            # spot_price を options pkl から取得（存在する場合）
-            spot_price = None
-            opt_path = os.path.join(OPTIONS_DIR, f"{symbol}.pkl")
-            if os.path.exists(opt_path):
-                with open(opt_path, 'rb') as f:
-                    opt_data = pickle.load(f)
-                spot_price = opt_data.get('spot_price')
-
-            iv_summary = _build_iv_summary(symbol, date_str, iv_df, spot_price)
-            upload_json_to_r2(s3_client, iv_summary, s3_key_json)
+            import iv_summary as iv_summary_mod
+            summary = iv_summary_mod.build_and_save(symbol, date_str)
+            if summary is None:
+                raise RuntimeError("IV summary could not be built")
+            upload_json_to_r2(s3_client, summary, s3_key_json)
             logging.info(f"  ✅ {s3_key_json}")
             success += 1
         except Exception as e:
@@ -545,7 +475,13 @@ def cleanup_old_dates(retention_days=30):
 
 
 def cleanup_old_iv_history(s3_client, retention_days=30):
-    """iv_history/ 配下の30日超の pkl.gz を R2 から削除する"""
+    """iv_history/ 配下の30日超の pkl.gz を R2 から削除する。
+
+    **サマリJSON（*_iv_summary.json）は削除しない**。σ_20MA や長期の
+    IVパーセンタイル検証に履歴が要るうえ、サマリは軽量なため無期限で保持する。
+    （以前は `_iv_summary` を除去して日付解釈していたため、重いpklと一緒に
+    サマリまで消えており、IV履歴が常に直近30日しか残らなかった）
+    """
     try:
         prefix = "iv_history/"
         paginator = s3_client.get_paginator('list_objects_v2')
@@ -555,9 +491,11 @@ def cleanup_old_iv_history(s3_client, retention_days=30):
         for page in paginator.paginate(Bucket=R2_BUCKET_NAME, Prefix=prefix):
             for obj in page.get('Contents', []):
                 key = obj['Key']
+                if not key.endswith('.pkl.gz'):
+                    continue   # サマリJSON等は保持
                 # キーから日付を抽出: iv_history/{symbol}/{date}.pkl.gz
                 basename = os.path.basename(key)
-                date_part = basename.split('.')[0].replace('_iv_summary', '')
+                date_part = basename.split('.')[0]
                 try:
                     datetime.strptime(date_part, '%Y-%m-%d')
                     if date_part < cutoff_date:
