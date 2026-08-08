@@ -187,6 +187,28 @@ def build_profile(gex_df, spot_price, range_pct=0.20):
 # メイン抽出
 # ─────────────────────────────────────────────────────────────
 
+def _build_probability(symbol, date_str, spot, levels):
+    """IVサマリを生成し、確率コーン用の `probability` ブロックを返す（失敗時 None）。
+
+    IVデータが無い銘柄でもパイプラインを止めないよう、例外は握りつぶす。
+    """
+    try:
+        import iv_summary
+        import prob_cone
+    except ImportError as e:
+        logging.debug(f"[{symbol}] probability skipped (import): {e}")
+        return None
+
+    try:
+        summary = iv_summary.build_and_save(symbol, date_str)
+        if not summary:
+            return None
+        return prob_cone.build_probability_block(summary, spot, levels)
+    except Exception as e:
+        logging.warning(f"[{symbol}] probability block failed: {e}")
+        return None
+
+
 def extract_levels_for_symbol(gex_data, config):
     """
     1銘柄の GEX データから全レベルを抽出する。
@@ -325,6 +347,14 @@ def extract_levels_for_symbol(gex_data, config):
             'calculation_time': pd.Timestamp.now().isoformat(),
         },
     }
+
+    # ── 確率コーン（タスク#13）─────────────────────────────────
+    # IVサマリをここで生成しておく（step5のアップロードより前に必要）。
+    # levels JSON に同梱することで、チャート生成も記事生成も
+    # IVアーカイブを参照せずに σ と到達確率を使える。
+    prob = _build_probability(symbol, date, float(spot), result['levels'])
+    if prob:
+        result['probability'] = prob
 
     # ── ログ ──────────────────────────────────────────────────
     def _fmt(level_set, label):

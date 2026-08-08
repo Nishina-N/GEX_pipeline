@@ -191,6 +191,76 @@ def draw_connecting_line(fig, ax_st, ax_lt, hvl_st, hvl_lt):
 # メインチャート作成
 # ─────────────────────────────────────────────────────────────
 
+DRAW_PROB_CONE = True   # タスク#13: 確率コーンの重ね描き
+
+
+def _cone_sigma(gex, symbol, date_str, span):
+    """コーン描画用の σ を得る。
+
+    第一候補は levels JSON の `probability`（3_extract_levels が同梱。
+    クラウドでもローカルでも必ず存在する）。無い場合のみ IVアーカイブに落ちる
+    （過去日を手元で再描画するときのため）。
+    """
+    prob = (gex or {}).get('probability') or {}
+    sigmas = prob.get('sigma') or {}
+    if sigmas:
+        # span（営業日）に最も近いテナーのσを使う
+        key = min(sigmas, key=lambda k: abs(int(k) - span))
+        try:
+            return float(sigmas[key])
+        except (TypeError, ValueError):
+            pass
+
+    if not date_str:
+        return None
+    try:
+        import iv_utils as _iv
+    except ImportError:
+        return None
+    summary = _iv.load_summary(symbol, date_str)
+    if not summary:
+        return None
+    return _iv.atm_iv_at_tenor(summary, max(7, int(span * 7 / 5)))
+
+
+def _draw_prob_cone(ax, gex, symbol, date_str, spot, n_hist, x_text):
+    """ローソク足パネルの未来領域に IVベースの確率コーンを重ねる.
+
+    未来領域は 27営業日ぶん確保されているが、x_text 以降はレベル線のラベルが
+    並ぶので、コーンはその手前までに収める（ラベルと重ねない）。
+    y軸はローソク足と共有なので、CW/PW/HVL との位置関係がそのまま読める。
+    """
+    x_end = x_text - 1                 # ラベル開始の手前で止める
+    span = max(1, x_end - n_hist)      # コーンの営業日数
+    sigma = _cone_sigma(gex, symbol, date_str, span)
+    if not sigma:
+        return
+
+    import numpy as _np
+    x = _np.linspace(n_hist, x_end, 60)
+    t = (x - n_hist) / 252.0           # 営業日 → 年
+    band = spot * sigma * _np.sqrt(t)
+
+    ax.fill_between(x, spot - 2 * band, spot + 2 * band,
+                    color='#3B6EA5', alpha=0.10, lw=0, zorder=1,
+                    clip_on=True)
+    ax.fill_between(x, spot - band, spot + band,
+                    color='#3B6EA5', alpha=0.16, lw=0, zorder=1,
+                    clip_on=True)
+    for edge in (band, -band):
+        ax.plot(x, spot + edge, color='#3B6EA5', lw=0.7, alpha=0.55,
+                zorder=1, clip_on=True)
+
+    # 注記はコーンの下（未来領域の下側は空いている）。上端側はレベル線ラベルが混むため避ける
+    y_lo, _ = ax.get_ylim()
+    y_text = spot - 2 * band[-1] - (ax.get_ylim()[1] - y_lo) * 0.012
+    # 左寄せ（右にはレベル線のラベル列があるので、そちらへ伸ばさない）
+    ax.text(n_hist, max(y_text, y_lo),
+            f'IV cone {sigma*100:.0f}%  ±1σ/±2σ',
+            fontsize=7, color='#3B6EA5', ha='left', va='top',
+            fontfamily='monospace', zorder=6, clip_on=True)
+
+
 def create_chart(symbol, candle_limit=100):
     """1銘柄のローソク足 + GEX ヒストグラムチャートを作成して PNG に保存する"""
 
@@ -357,6 +427,10 @@ def create_chart(symbol, candle_limit=100):
     if tz:
         ax_c.axhspan(tz['lower'], tz['upper'],
                      color=AMBER, alpha=0.06, zorder=0, label='Transition Zone')
+
+    # 確率コーン（タスク#13）: 未来領域にIVベースの±1σ/±2σを重ねる
+    if DRAW_PROB_CONE:
+        _draw_prob_cone(ax_c, gex, symbol, gex.get('date'), spot, n_hist, _x_text)
 
     # ── GEX ヒストグラム ─────────────────────────────────────
     st_exps = exp_info.get('shortTermExpirations', [])
