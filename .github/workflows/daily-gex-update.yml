@@ -2,7 +2,8 @@ name: Daily GEX Update
 
 on:
   schedule:
-    - cron: '30 22 * * 1-5'  # Mon-Fri 22:30 UTC (after stock-data-pipeline)
+    - cron: '7 23 * * 1-5'  # Mon-Fri 23:07 UTC / 08:07 JST (after stock-data-pipeline)
+                            # 毎時00/30分はGitHub側が混雑しスケジュール実行が遅延・欠落するため意図的にずらしている
   workflow_dispatch:
 
 concurrency:
