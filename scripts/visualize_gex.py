@@ -28,6 +28,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 DATA_FOLDER = "data"
 LEVELS_DIR = os.path.join(DATA_FOLDER, "levels")
+PREV_GEX_DIR = os.path.join(DATA_FOLDER, "r2", "gex", "daily")  # 前営業日の levels
 OUTPUT_DIR = os.path.join(DATA_FOLDER, "charts")
 
 # ─── カラーパレット（仕様 §1 準拠） ──────────────────────────
@@ -49,6 +50,65 @@ def load_gex_levels(symbol):
         return None
     with open(path) as f:
         return json.load(f)
+
+
+def load_prev_profiles(symbol, date_str):
+    """前営業日の profile を {panel: {strike: netGEX}} で返す（無ければ None）。
+
+    前日データは step6 (6_download_previous_data.py) が
+    data/r2/gex/daily/{prev_date}/{SYMBOL}.json に置く。ローカルでは
+    pull_from_r2.py が同じ場所へ落とす。
+
+    参照するのは _prev_session_dir() が返す「直前セッション」1 日分のみ。
+    その日に銘柄が無ければ None を返す（＝色分けしない）。
+    """
+    prev_date = _prev_session_dir(date_str)
+    if not prev_date:
+        return None
+
+    # 直前セッションのディレクトリ内だけを見る。銘柄が無ければ色分けしない
+    # （初登場の OI 急増銘柄を、数週間前の断面と比べてしまうのを防ぐ）。
+    path = os.path.join(PREV_GEX_DIR, prev_date, f"{symbol}.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding='utf-8') as f:
+            prev = json.load(f)
+    except (OSError, ValueError):
+        return None
+
+    profile = prev.get('profile') or {}
+    out = {}
+    for key in ('total', 'short_term', 'long_term'):
+        rows = profile.get(key) or []
+        out[key] = {float(p['strike']): float(p['netGEX'])
+                    for p in rows if p.get('strike') is not None}
+    if not any(out.values()):
+        return None
+    out['_date'] = prev_date
+    return out
+
+
+def _prev_session_dir(date_str):
+    """date_str の直前セッションの日付ディレクトリ名を返す。
+
+    休場日は空ディレクトリだけが残ることがある（例: レイバーデー）ので、
+    JSON が 1 つ以上入っている最新のディレクトリを「直前セッション」とみなす。
+    """
+    if not date_str or not os.path.isdir(PREV_GEX_DIR):
+        return None
+    try:
+        cands = sorted(d for d in os.listdir(PREV_GEX_DIR) if d < date_str)
+    except OSError:
+        return None
+    for d in reversed(cands):
+        p = os.path.join(PREV_GEX_DIR, d)
+        try:
+            if any(f.endswith('.json') for f in os.listdir(p)):
+                return d
+        except OSError:
+            continue
+    return None
 
 
 # ─────────────────────────────────────────────────────────────
@@ -86,12 +146,61 @@ def draw_volume_bars(ax, df):
                color=face, edgecolor='#888888', linewidth=0.3, width=0.8, zorder=1)
 
 
-def draw_gex_histogram(ax, profile, specific_levels, title_lines, y_min, y_max):
+def _delta_abs(strikes, net_gex, prev_map, max_abs):
+    """各ストライクの Δ|netGEX| を当日 max_abs で正規化して返す。
+
+    厚み（＝壁の強さ）は符号ではなく絶対値なので、Put Wall が
+    -2.28B → -2.73B と深まる場合も「厚くなった（正の Δ）」として扱う。
+    比ではなく差なので、ゼロ除算も符号反転による発散も起きない。
+
+    戻り値: (deltas, is_new) — is_new は前日に存在しなかったストライク。
+    """
+    n = len(strikes)
+    if not prev_map or max_abs <= 0:
+        return np.zeros(n), np.zeros(n, dtype=bool)
+
+    deltas = np.zeros(n)
+    is_new = np.zeros(n, dtype=bool)
+    for i, (k, v) in enumerate(zip(strikes, net_gex)):
+        prev = prev_map.get(float(k))
+        if prev is None:
+            # 前日に無かったストライク＝全額が増分
+            deltas[i] = abs(v) / max_abs
+            is_new[i] = abs(v) > 0
+        else:
+            deltas[i] = (abs(v) - abs(prev)) / max_abs
+    return deltas, is_new
+
+
+def _delta_color(delta):
+    """Δ|netGEX|（正規化済み）→ (色, alpha)。
+
+    +0.15 以上で朱に振り切る程度のスケール。閾値ではなく連続的に効かせる。
+    """
+    if delta is None or not np.isfinite(delta) or abs(delta) < 0.01:
+        return INK, 0.82                      # ほぼ変化なし
+    t = min(abs(float(delta)) / 0.15, 1.0)
+    if delta > 0:
+        return _blend(INK, CRIMSON, t), 0.82 + 0.10 * t   # 厚くなった
+    return _blend(INK, GRAY, t), 0.82 - 0.32 * t          # 薄くなった
+
+
+def _blend(c1, c2, t):
+    """16進カラー c1→c2 を t(0..1) で線形補間する。"""
+    a = tuple(int(c1[i:i + 2], 16) for i in (1, 3, 5))
+    b = tuple(int(c2[i:i + 2], 16) for i in (1, 3, 5))
+    return '#%02X%02X%02X' % tuple(int(round(x + (y - x) * t)) for x, y in zip(a, b))
+
+
+def draw_gex_histogram(ax, profile, specific_levels, title_lines, y_min, y_max,
+                       prev_map=None):
     """
     GEX ヒストグラム（横棒）を描画する。
 
     - バーは netGEX を各パネル内の最大絶対値で正規化（-1 〜 +1 スケール）
-    - バーの色は IV 異常度に連動（現状は一律 INK; 将来対応）
+    - バーの色は**前日からの厚みの変化** Δ|netGEX| に連動（タスクB'）:
+      厚くなった＝朱寄り / 薄くなった＝淡い墨 / 前日に無かったストライク＝縁取り。
+      prev_map（{strike: netGEX}）が None のときは一律 INK（従来どおり）。
     - specific_levels に基づきパネル固有のレベル線を引く
     """
     ax.set_facecolor(CREAM)
@@ -124,11 +233,15 @@ def draw_gex_histogram(ax, profile, specific_levels, title_lines, y_min, y_max):
             max_abs = 1.0
         scaled = net_gex / max_abs
 
-        for strike, val in zip(strikes, scaled):
-            # IV 異常度による色分け（将来: 墨→琥珀→朱）
-            bar_color = INK
+        # 前日比の厚み変化 Δ|netGEX|（色の強さの基準は当日の max_abs）
+        deltas, is_new = _delta_abs(strikes, net_gex, prev_map, max_abs)
+
+        for strike, val, dlt, new in zip(strikes, scaled, deltas, is_new):
+            bar_color, alpha = _delta_color(dlt)
             ax.barh(strike, val, height=bar_h,
-                    color=bar_color, alpha=0.82, edgecolor='none', zorder=2)
+                    color=bar_color, alpha=alpha, zorder=2,
+                    edgecolor=(AMBER if new else 'none'),
+                    linewidth=(0.7 if new else 0))
 
         # 最大・最小 GEX のストライクにラベル
         idx_max = int(np.argmax(net_gex))
@@ -192,6 +305,7 @@ def draw_connecting_line(fig, ax_st, ax_lt, hvl_st, hvl_lt):
 # ─────────────────────────────────────────────────────────────
 
 DRAW_PROB_CONE = True   # タスク#13: 確率コーンの重ね描き
+COLOR_BY_DELTA = True   # タスクB': GEXバーを前日比の厚み変化で色分け
 
 
 def _cone_sigma(gex, symbol, date_str, span):
@@ -446,13 +560,20 @@ def create_chart(symbol, candle_limit=100):
         ([f'→ {lt_end}'] if lt_end else ['(no data)'])
     )
 
+    # 前営業日の profile（タスクB': バーの色を前日比の厚み変化に連動させる）
+    prev_profiles = load_prev_profiles(symbol, gex.get('date')) if COLOR_BY_DELTA else None
+    if prev_profiles:
+        logging.info(f"[{symbol}] delta coloring vs {prev_profiles.get('_date')}")
+
     draw_gex_histogram(
         ax_st, gex['profile']['short_term'],
-        levels.get('short_term'), st_title, y_min, y_max
+        levels.get('short_term'), st_title, y_min, y_max,
+        prev_map=(prev_profiles or {}).get('short_term')
     )
     draw_gex_histogram(
         ax_lt, gex['profile']['long_term'],
-        levels.get('long_term'), lt_title, y_min, y_max
+        levels.get('long_term'), lt_title, y_min, y_max,
+        prev_map=(prev_profiles or {}).get('long_term')
     )
 
     # 長期パネルのY軸ラベルは非表示（左側ローソク足と共通スケールのため不要）
@@ -490,8 +611,9 @@ def create_chart(symbol, candle_limit=100):
     ax_info.set_xticks([])
     ax_info.set_yticks([])
 
-    # ラベル列（左）と値列（右）を分けて描画
-    col_l = 0.46   # ラベル開始 x（axes 座標）
+    # ラベル列（左）と値列（右）を分けて描画。
+    # バー色の凡例を出す日は、そのぶん右へ寄せて重なりを避ける。
+    col_l = 0.58 if prev_profiles else 0.46   # ラベル開始 x（axes 座標）
     col_r = col_l + 0.04  # 値開始 x
     rows  = [0.85, 0.68, 0.50, 0.32, 0.14]   # 各行の y（axes 座標、上から）
 
@@ -532,6 +654,36 @@ def create_chart(symbol, candle_limit=100):
         ax_info.text(col_r, y, val, transform=ax_info.transAxes,
                      fontsize=8, color=vcol, fontfamily='monospace',
                      va='center', ha='left', fontweight='bold')
+
+    # バー色の凡例（前日比の厚み変化）。前日データが無い日は出さない。
+    if prev_profiles:
+        # 右ブロック（Data / GEX / HVL / Call-Put / γFilter）と同じ 5 行に揃える。
+        # dx は凡例ブロック全体の右シフト量。パネル実寸 664px なので 1px ≒ 0.0015。
+        dx = 0.07                         # 約46px
+        ax_info.text(0.0275 + dx, rows[0], 'Bars vs prev',
+                     transform=ax_info.transAxes, fontsize=7, color=GRAY,
+                     fontfamily='monospace', va='center', ha='left')
+        legend_rows = [
+            (rows[1], _blend(INK, CRIMSON, 1.0), 'thicker'),
+            (rows[2], INK,                       'unchanged'),
+            (rows[3], _blend(INK, GRAY, 1.0),    'thinner'),
+        ]
+        for y, c, lbl in legend_rows:
+            ax_info.plot([0.04 + dx, 0.10 + dx], [y, y],
+                         transform=ax_info.transAxes,
+                         color=c, lw=3.2, solid_capstyle='butt', clip_on=False)
+            ax_info.text(0.12 + dx, y, lbl, transform=ax_info.transAxes,
+                         fontsize=7, color=GRAY, fontfamily='monospace',
+                         va='center', ha='left')
+        rect_h = 0.06
+        ax_info.add_patch(Rectangle(
+            (0.04 + dx, rows[4] - rect_h / 2), 0.06, rect_h,
+            transform=ax_info.transAxes,
+            facecolor=_blend(INK, CRIMSON, 1.0), edgecolor=AMBER,
+            linewidth=1.0, clip_on=False))
+        ax_info.text(0.12 + dx, rows[4], 'new strike',
+                     transform=ax_info.transAxes, fontsize=7, color=GRAY,
+                     fontfamily='monospace', va='center', ha='left')
 
     # ── 保存 ─────────────────────────────────────────────────
     os.makedirs(OUTPUT_DIR, exist_ok=True)
