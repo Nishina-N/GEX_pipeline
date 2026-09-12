@@ -28,8 +28,13 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 GEX_DIR = Path("data/r2/gex/daily")
 
-# コア銘柄は常にダウンロードを保証する（設定変更時のサイレント障害を防ぐ）
-CORE_SYMBOLS = ['SPY', 'QQQ', 'SMH', 'IWM', 'NVDA']
+# 記事が毎日必ず扱う指数とM7。OI急増スクリーニングの結果によらず常に
+# ダウンロードを保証する（設定変更時のサイレント障害を防ぐ）。
+# これらの前日データは visualize_gex.py のバー色分け（前日比の厚み変化）にも
+# 使われるため、欠けると該当銘柄のチャートが単色にフォールバックする。
+INDEX_SYMBOLS = ['SPY', 'QQQ', 'IWM', 'SMH', 'DIA']
+M7_SYMBOLS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA']
+CORE_SYMBOLS = INDEX_SYMBOLS + M7_SYMBOLS
 
 
 def create_r2_client():
