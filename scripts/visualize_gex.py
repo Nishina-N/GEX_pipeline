@@ -384,11 +384,35 @@ def create_chart(symbol, candle_limit=100):
         return None
 
     ticker = yf.Ticker(symbol)
-    df = ticker.history(period="1y").tail(candle_limit)
+    raw = ticker.history(period="1y")
+
+    # 未確定バーの除去。yfinance は当日分の行を OHLC が NaN のまま返すことがあり、
+    # draw_candlesticks / draw_volume_bars はそれを黙ってスキップする一方で
+    # n_hist = len(df) には数えてしまう。結果「枠はあるが足が描かれない」
+    # （＝最新の1本が欠けたチャート）になるため、tail を取る前に落とす。
+    ohlc = ['Open', 'High', 'Low', 'Close']
+    clean = raw.dropna(subset=ohlc)
+    dropped = len(raw) - len(clean)
+    if dropped:
+        logging.warning(
+            f"[{symbol}] Dropped {dropped} incomplete price row(s) "
+            f"(latest kept: {clean.index[-1].date() if len(clean) else 'none'})"
+        )
+
+    df = clean.tail(candle_limit)
     if df.empty:
         logging.warning(f"[{symbol}] No price data")
         return None
     df.index = df.index.tz_localize(None)
+
+    # チャートの最終足と GEX データの日付がズレていたら警告（無言のズレを防ぐ）
+    gex_date = gex.get('date')
+    last_bar = str(df.index[-1].date())
+    if gex_date and last_bar != gex_date:
+        logging.warning(
+            f"[{symbol}] Last candle {last_bar} != GEX date {gex_date} "
+            f"(price data lagging)"
+        )
 
     # 未来の 27 営業日を追加（レベル線の表示用、現在の 2/3 程度）
     n_hist = len(df)   # 履歴バー数（未来領域の開始インデックス）
