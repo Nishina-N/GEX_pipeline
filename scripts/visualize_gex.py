@@ -89,6 +89,46 @@ def load_prev_profiles(symbol, date_str):
     return out
 
 
+def _recover_tail_bars(ticker, symbol, clean, missing_dates):
+    """日足が未確定の日を、1時間足を日足に集約して復元する。
+
+    yfinance は当日の日足を OHLC=NaN のまま返すことがあるが、
+    1時間足には値が入っている場合がある（2026-09-16 の META/CARR/Q で実際に発生）。
+    復元できなければ clean をそのまま返す（＝チャートは1日前で止まる）。
+    """
+    try:
+        intra = ticker.history(period="5d", interval="1h")
+    except Exception as e:                                  # ネットワーク等
+        logging.warning(f"[{symbol}] Intraday fetch failed: {e}")
+        return clean
+    if intra.empty:
+        return clean
+
+    intra.index = intra.index.tz_localize(None)
+    agg = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'}
+    if 'Volume' in intra.columns:
+        agg['Volume'] = 'sum'
+    daily = intra.resample('1D').agg(agg).dropna(subset=['Open', 'Close'])
+
+    rebuilt = []
+    for d in missing_dates:
+        hit = daily[daily.index.normalize() == pd.Timestamp(d).normalize()]
+        if hit.empty:
+            continue
+        row = hit.iloc[0]
+        clean.loc[d, ['Open', 'High', 'Low', 'Close']] = [
+            row['Open'], row['High'], row['Low'], row['Close']
+        ]
+        if 'Volume' in row.index and 'Volume' in clean.columns:
+            clean.loc[d, 'Volume'] = row['Volume']
+        rebuilt.append(str(pd.Timestamp(d).date()))
+
+    if rebuilt:
+        clean = clean.sort_index()
+        logging.info(f"[{symbol}] Recovered {len(rebuilt)} bar(s) from 1h data: {', '.join(rebuilt)}")
+    return clean
+
+
 def _prev_session_dir(date_str):
     """date_str の直前セッションの日付ディレクトリ名を返す。
 
@@ -385,6 +425,8 @@ def create_chart(symbol, candle_limit=100):
 
     ticker = yf.Ticker(symbol)
     raw = ticker.history(period="1y")
+    if not raw.empty:
+        raw.index = raw.index.tz_localize(None)
 
     # 未確定バーの除去。yfinance は当日分の行を OHLC が NaN のまま返すことがあり、
     # draw_candlesticks / draw_volume_bars はそれを黙ってスキップする一方で
@@ -398,12 +440,17 @@ def create_chart(symbol, candle_limit=100):
             f"[{symbol}] Dropped {dropped} incomplete price row(s) "
             f"(latest kept: {clean.index[-1].date() if len(clean) else 'none'})"
         )
+        # 末尾が欠けている場合は日中足から復元を試みる（日足だけ未populatedのことがある）
+        tail_missing = [d for d in raw.index
+                        if d not in clean.index and (clean.empty or d > clean.index[-1])]
+        if tail_missing:
+            clean = _recover_tail_bars(ticker, symbol, clean, tail_missing)
 
     df = clean.tail(candle_limit)
     if df.empty:
         logging.warning(f"[{symbol}] No price data")
         return None
-    df.index = df.index.tz_localize(None)
+    # index の tz は取得直後に落としてある（復元処理が naive 前提のため）
 
     # チャートの最終足と GEX データの日付がズレていたら警告（無言のズレを防ぐ）
     gex_date = gex.get('date')
