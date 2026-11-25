@@ -64,7 +64,7 @@ python scripts/1_fetch_options_data.py --symbols SPY AAPL TSLA
 ```
 
 ### GitHub Actions
-- **自動**: 月〜金 22:30 UTC（stock-data-pipeline の後）
+- **自動**: ローカル PC が 16:35 ET（冬時間、日本時間 6:35）に実行。GitHub Actions は 22:35 UTC に予備として動き、R2 に当日分があれば何もしない
 - **手動**: Actions タブから "Daily GEX Update" → "Run workflow"
 
 ---
