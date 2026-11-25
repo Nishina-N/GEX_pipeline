@@ -2,7 +2,7 @@ name: Daily GEX Update
 
 on:
   schedule:
-    - cron: '35 22 * * 1-5'  # Mon-Fri 22:35 UTC = 17:35 EST / 18:35 EDT。ローカル実行(16:35 ET)の予備。R2 に当日分があれば何もしない
+    - cron: '35 23 * * 1-5'  # Mon-Fri 23:35 UTC = 18:35 EST / 19:35 EDT。ローカル実行(17:05 ET)の予備。R2 に当日分があれば何もしない
                             # 毎時00/30分はGitHub側が混雑しスケジュール実行が遅延・欠落するため意図的にずらしている
   workflow_dispatch:
 
