@@ -1,8 +1,16 @@
 """
 1_fetch_options_data.py
 
-yfinance からオプションチェーンデータを取得し、ローカルに一時保存する。
+オプションチェーンを取得し、ローカルに一時保存する。
+
+取得元:
+  1. Cboe の遅延データ（cdn.cboe.com, 約15分遅れ, 1日1回の取得で十分）
+     - ET 0時を過ぎても前日の建玉(OI)が残る
+  2. 取れなかった銘柄だけ yfinance で取る（予備）
+     - yfinance は ET 0時を過ぎると OI が 0 になるため、OI>0 の行が少なすぎる結果は捨てる
 """
+import re
+from datetime import datetime, timedelta
 import os
 import sys
 import json
@@ -13,6 +21,7 @@ import argparse
 
 import yfinance as yf
 import pandas as pd
+import requests
 
 from market_calendar import get_effective_market_date, set_pipeline_date
 
@@ -32,6 +41,79 @@ def load_config():
     with open(CONFIG_PATH, "r") as f:
         return json.load(f)
 
+
+
+CBOE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{symbol}.json"
+CBOE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+    "Accept": "application/json",
+    "Referer": "https://www.cboe.com/",
+}
+MIN_OI_RATIO = 0.2   # OI>0 の行がこれ未満なら「壊れたデータ」とみなす
+
+
+def fetch_options_cboe(symbol, max_expiry_days=90, max_retries=3, backoff_factor=2):
+    """Cboe の遅延データから 1 銘柄の全満期を取得する。返す形は yfinance 版と同じ。"""
+    pat = re.compile(r"^" + re.escape(symbol) + r"(\d{6})([CP])(\d{8})$")
+    for attempt in range(max_retries):
+        try:
+            r = requests.get(CBOE_URL.format(symbol=symbol), headers=CBOE_HEADERS, timeout=60)
+            if r.status_code == 404:
+                logging.warning(f"[{symbol}] Cboe: no data (404)")
+                return None
+            r.raise_for_status()
+            js = r.json()
+            data = js["data"]
+            # 引け後は close が当日の終値。current_price は時間外を含むので使わない
+            spot_price = float(data.get("close") or data.get("current_price") or 0)
+            if spot_price <= 0:
+                logging.warning(f"[{symbol}] Cboe: no spot price")
+                return None
+
+            cutoff = datetime.now() + timedelta(days=max_expiry_days)
+            rows = []
+            for o in data.get("options", []):
+                m = pat.match(o.get("option", ""))
+                if not m:
+                    continue   # 調整後オプション等（別ルート）は除外
+                exp = datetime.strptime(m.group(1), "%y%m%d")
+                if exp > cutoff:
+                    continue
+                strike = int(m.group(3)) / 1000.0
+                is_call = m.group(2) == "C"
+                rows.append({
+                    "strike": strike,
+                    "expiration": exp.strftime("%Y-%m-%d"),
+                    "optionType": "call" if is_call else "put",
+                    "openInterest": int(o.get("open_interest") or 0),
+                    "impliedVolatility": float(o.get("iv") or 0),
+                    "lastPrice": float(o.get("last_trade_price") or 0),
+                    "volume": float(o.get("volume") or 0),
+                    "bid": float(o.get("bid") or 0),
+                    "ask": float(o.get("ask") or 0),
+                    "inTheMoney": (spot_price > strike) if is_call else (spot_price < strike),
+                })
+            if not rows:
+                logging.warning(f"[{symbol}] Cboe: no contracts")
+                return None
+            chain = pd.DataFrame(rows)
+            exps = sorted(chain["expiration"].unique().tolist())
+            oi_ratio = (chain["openInterest"] > 0).mean()
+            logging.info(
+                f"[{symbol}] Cboe ({js.get('timestamp')} ET): Spot ${spot_price:.2f}, "
+                f"{len(chain)} contracts across {len(exps)} expirations, OI>0 {oi_ratio:.0%}"
+            )
+            if oi_ratio < MIN_OI_RATIO:
+                logging.warning(f"[{symbol}] Cboe: OI>0 が {oi_ratio:.0%} しかない。使わない")
+                return None
+            return {"symbol": symbol, "spot_price": spot_price, "chain": chain,
+                    "expirations": exps, "source": "cboe"}
+        except Exception as e:
+            wait_time = backoff_factor ** attempt
+            logging.error(f"[{symbol}] Cboe attempt {attempt + 1}/{max_retries} failed: {e}")
+            time.sleep(wait_time)
+    return None
 
 def fetch_options_for_symbol(symbol, max_expiry_days=90, max_retries=3, backoff_factor=2):
     """
@@ -68,7 +150,6 @@ def fetch_options_for_symbol(symbol, max_expiry_days=90, max_retries=3, backoff_
                 return None
 
             # 満期日のフィルタリング（max_expiry_days 以内）
-            from datetime import datetime, timedelta
             cutoff_date = datetime.now() + timedelta(days=max_expiry_days)
             filtered_expirations = []
             for exp in expirations:
@@ -129,11 +210,20 @@ def fetch_options_for_symbol(symbol, max_expiry_days=90, max_retries=3, backoff_
                 f"across {len(filtered_expirations)} expirations"
             )
 
+            oi_ratio = (full_chain['openInterest'] > 0).mean() if 'openInterest' in full_chain.columns else 0
+            if oi_ratio < MIN_OI_RATIO:
+                logging.warning(
+                    f"[{symbol}] yfinance: OI>0 が {oi_ratio:.0%} しかない"
+                    "（ET 0時過ぎの可能性）。使わない"
+                )
+                return None
+
             return {
                 'symbol': symbol,
                 'spot_price': spot_price,
                 'chain': full_chain,
-                'expirations': filtered_expirations
+                'expirations': filtered_expirations,
+                'source': 'yfinance'
             }
 
         except Exception as e:
@@ -218,12 +308,20 @@ def main(symbols=None, symbols_from=None):
     for i, symbol in enumerate(symbols):
         logging.info(f"\n[{i + 1}/{len(symbols)}] Processing {symbol}...")
 
-        result = fetch_options_for_symbol(
+        result = fetch_options_cboe(
             symbol,
             max_expiry_days=max_expiry_days,
             max_retries=max_retries,
             backoff_factor=backoff
         )
+        if result is None:
+            logging.info(f"[{symbol}] Cboe で取れなかったので yfinance で取る")
+            result = fetch_options_for_symbol(
+                symbol,
+                max_expiry_days=max_expiry_days,
+                max_retries=max_retries,
+                backoff_factor=backoff
+            )
 
         if result:
             # オプションチェーン本体を保存
@@ -254,7 +352,7 @@ def main(symbols=None, symbols_from=None):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Fetch options data from yfinance")
+    parser = argparse.ArgumentParser(description="Fetch options data (Cboe, fallback yfinance)")
     parser.add_argument(
         '--symbols', nargs='+', default=None,
         help='Override target symbols (e.g., --symbols SPY AAPL TSLA)'
