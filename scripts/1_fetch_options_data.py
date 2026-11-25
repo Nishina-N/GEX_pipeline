@@ -53,7 +53,7 @@ CBOE_HEADERS = {
 MIN_OI_RATIO = 0.2   # OI>0 の行がこれ未満なら「壊れたデータ」とみなす
 
 
-def fetch_options_cboe(symbol, max_expiry_days=90, max_retries=3, backoff_factor=2):
+def fetch_options_cboe(symbol, max_expiry_days=90, max_retries=3, backoff_factor=2, market_date=None):
     """Cboe の遅延データから 1 銘柄の全満期を取得する。返す形は yfinance 版と同じ。"""
     pat = re.compile(r"^" + re.escape(symbol) + r"(\d{6})([CP])(\d{8})$")
     for attempt in range(max_retries):
@@ -65,6 +65,10 @@ def fetch_options_cboe(symbol, max_expiry_days=90, max_retries=3, backoff_factor
             r.raise_for_status()
             js = r.json()
             data = js["data"]
+            ts = str(js.get("timestamp") or "")
+            if market_date and ts[:10] < market_date:
+                logging.warning(f"[{symbol}] Cboe: データが古い（{ts} ET < {market_date}）。使わない")
+                return None
             # 引け後は close が当日の終値。current_price は時間外を含むので使わない
             spot_price = float(data.get("close") or data.get("current_price") or 0)
             if spot_price <= 0:
@@ -312,7 +316,8 @@ def main(symbols=None, symbols_from=None):
             symbol,
             max_expiry_days=max_expiry_days,
             max_retries=max_retries,
-            backoff_factor=backoff
+            backoff_factor=backoff,
+            market_date=today_str
         )
         if result is None:
             logging.info(f"[{symbol}] Cboe で取れなかったので yfinance で取る")
