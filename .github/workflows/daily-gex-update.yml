@@ -35,10 +35,21 @@ jobs:
           pip install -r requirements.txt
         timeout-minutes: 10
 
+      - name: Check whether to run (holiday / after ET midnight / already in R2)
+        id: check
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: python scripts/check_should_run.py
+
       - name: Create data directories
+        if: steps.check.outputs.run == 'true'
         run: mkdir -p data/options data/gex data/levels data/iv_history data/charts
 
       - name: 0. Screen OI surge
+        if: steps.check.outputs.run == 'true'
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -49,25 +60,31 @@ jobs:
         continue-on-error: true
 
       - name: Wait for yfinance rate limit cooldown
+        if: steps.check.outputs.run == 'true'
         run: sleep 120
 
       - name: 1. Fetch options data
+        if: steps.check.outputs.run == 'true'
         run: python scripts/1_fetch_options_data.py --symbols-from data/symbols_oi_surge.json
         timeout-minutes: 15
 
       - name: 2. Calculate GEX
+        if: steps.check.outputs.run == 'true'
         run: python scripts/2_calculate_gex.py
         timeout-minutes: 5
 
       - name: 3. Extract GEX levels
+        if: steps.check.outputs.run == 'true'
         run: python scripts/3_extract_levels.py
         timeout-minutes: 5
 
       - name: 4. Export to JSON
+        if: steps.check.outputs.run == 'true'
         run: python scripts/4_export_to_json.py
         timeout-minutes: 5
 
       - name: 5. Upload to R2
+        if: steps.check.outputs.run == 'true'
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -77,6 +94,7 @@ jobs:
         timeout-minutes: 10
 
       - name: 6. Download previous day data from R2
+        if: steps.check.outputs.run == 'true'
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -87,10 +105,12 @@ jobs:
         timeout-minutes: 5
 
       - name: 6. Visualize GEX
+        if: steps.check.outputs.run == 'true'
         run: python scripts/visualize_gex.py
         timeout-minutes: 5
 
       - name: 6. Upload charts to R2
+        if: steps.check.outputs.run == 'true'
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
