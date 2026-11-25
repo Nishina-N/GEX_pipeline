@@ -66,8 +66,9 @@ def fetch_options_cboe(symbol, max_expiry_days=90, max_retries=3, backoff_factor
             js = r.json()
             data = js["data"]
             ts = str(js.get("timestamp") or "")
-            if market_date and ts[:10] < market_date:
-                logging.warning(f"[{symbol}] Cboe: データが古い（{ts} ET < {market_date}）。使わない")
+            # 取得日の引け（16:00 ET）より前のデータは、前日以前の引け後のもの
+            if market_date and ts[:16] < f"{market_date} 16:00":
+                logging.warning(f"[{symbol}] Cboe: データが古い（{ts} ET < {market_date} 16:00）。使わない")
                 return None
             # 引け後は close が当日の終値。current_price は時間外を含むので使わない
             spot_price = float(data.get("close") or data.get("current_price") or 0)
