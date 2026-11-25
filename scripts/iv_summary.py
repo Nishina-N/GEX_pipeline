@@ -17,7 +17,7 @@ import pickle
 
 import pandas as pd
 
-DATA_FOLDER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+DATA_FOLDER = "data"  # 他の step と同じく実行時の作業フォルダ基準（ローカル実行は別フォルダで動く）
 IV_HIST_DIR = os.path.join(DATA_FOLDER, "iv_history")
 OPTIONS_DIR = os.path.join(DATA_FOLDER, "options")
 
