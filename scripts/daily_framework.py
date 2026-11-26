@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""日々の分析の型（5つの面の天気）を計算し、テクニカルの図を描く。
+"""日々の分析の型（6つの指標の状態）を計算し、テクニカルの図を描く。
 
 使い方:
   python scripts/daily_framework.py --date 2026-11-20
@@ -8,7 +8,7 @@
   data/framework/{date}.json        各面の数字・天気・見立て（SOUBA から借りた値の写しも含む）
   data/framework/{date}_{SPY,QQQ,SMH}_tech.png 日足（移動平均・価格帯別出来高・出来高）
   data/framework/{date}_macro.png / _sentiment.png / _sector.png 5つの面の図
-状態は 健全（+1）・様子見（0）・注意（-1）・警報（-2）。心理の面は警報を使わず「行き過ぎ」を添える。
+状態は 良好（+1）・様子見（0）・注意（-1）・警報（-2）。心理の面は警報を使わず「行き過ぎ」を添える。
 
 基準は Obsidian の fleet note/構成案/分析の型_v0.md と同じ（仮の数字）。
 Fear & Greed は data/framework/fg_{date}.json（{"score": 9.7, "history": [["2026-01-02", 45], ...]}）があれば使う。
@@ -40,7 +40,7 @@ DEFENSIVE = ["XLP", "XLU", "XLV", "XLRE"]
 CYCLICAL = ["XLE", "XLF", "XLI", "XLB"]
 SECTOR_JA = {"XLK": "情報技術", "XLY": "一般消費財", "XLC": "通信", "XLP": "生活必需品", "XLU": "公益",
              "XLV": "ヘルスケア", "XLRE": "不動産", "XLE": "エネルギー", "XLF": "金融", "XLI": "資本財", "XLB": "素材"}
-SCORE = {"健全": 1, "様子見": 0, "注意": -1, "警報": -2}
+SCORE = {"良好": 1, "様子見": 0, "注意": -1, "警報": -2}
 TECH_SYMS = ["SPY", "QQQ", "SMH"]
 
 
@@ -57,7 +57,7 @@ def face_macro(px, i):
     elif d5 >= 10:
         w, why = "注意", "10年債が5日で10bp以上上昇"
     elif d5 <= -10 and spy5 > 0:
-        w, why = "健全", "10年債が低下し、株も上昇"
+        w, why = "良好", "10年債が低下し、株も上昇"
     elif d5 <= -10:
         w, why = "様子見", "10年債は低下したが株も下落（安全資産への逃避）"
     else:
@@ -77,7 +77,7 @@ def face_sentiment(px, i, date):
     if vix >= 25 or (fg is not None and fg <= 25):
         w = "注意"
     elif vix < 18 and (fg is None or fg >= 45):
-        w = "健全"
+        w = "良好"
     else:
         w = "様子見"
     extreme = None
@@ -101,7 +101,7 @@ def face_gex(date):
                       total_gex_bn=round(j.get("totalGEX", 0) / 1e9, 2))
     spy, qqq = out["SPY"]["diff"], out["QQQ"]["diff"]
     if spy > 0.3 and qqq > 0:
-        w = "健全"
+        w = "良好"
     elif spy <= -3 and out["SPY"]["put_wall"] and out["SPY"]["spot"] < out["SPY"]["put_wall"]:
         w = "警報"
     elif spy < -0.3:
@@ -126,7 +126,7 @@ def face_strength(date):
     if status == "Strong Negative" and above.get("above_200", 100) < 30:
         w = "警報"
     elif good_status and color in ("GREEN", "BLUE"):
-        w = "健全"
+        w = "良好"
     elif bad_status or color in ("PURPLE", "RED"):
         w = "注意"
     else:
@@ -142,7 +142,7 @@ def face_sector(px, i):
     r1 = {s: pct(px[s].iloc[i], px[s].iloc[i - 1]) for s in GROWTH + DEFENSIVE + CYCLICAL}
     g = np.mean([r5[s] for s in GROWTH]); d = np.mean([r5[s] for s in DEFENSIVE]); c = np.mean([r5[s] for s in CYCLICAL])
     if g > 0 and g > d:
-        w = "健全"
+        w = "良好"
     elif g <= -5 and d - g >= 3:
         w = "警報"
     elif g < 0 and g < d:
@@ -155,11 +155,50 @@ def face_sector(px, i):
                 top_1d=[fmt(s) for s in rank[:3]], bottom_1d=[fmt(s) for s in rank[-3:]])
 
 
-def technical(sym, date, out_png):
-    full = yf.download(sym, start=pd.Timestamp(date) - pd.Timedelta(days=420), end=pd.Timestamp(date) + pd.Timedelta(days=1),
-                       progress=False, auto_adjust=False)
+def _daily(sym, date, days=420):
+    """日足（OHLCV, 調整なし）。記事の日の日足が未確定（Close が NaN）なら1時間足から復元する
+    （visualize_gex._recover_tail_bars と同じ考え方）。復元できなければその日は落とす。"""
+    full = yf.download(sym, start=pd.Timestamp(date) - pd.Timedelta(days=days),
+                       end=pd.Timestamp(date) + pd.Timedelta(days=1), progress=False, auto_adjust=False)
     full.columns = [c[0] if isinstance(c, tuple) else c for c in full.columns]
-    full = full.dropna(subset=["Close"])
+    d0 = pd.Timestamp(date)
+    if d0 in full.index and pd.isna(full.loc[d0, "Close"]):
+        try:
+            intra = yf.Ticker(sym).history(period="5d", interval="1h")
+            intra.index = intra.index.tz_localize(None)
+            day = intra[intra.index.normalize() == d0].dropna(subset=["Close"])
+            if not day.empty:
+                full.loc[d0, ["Open", "High", "Low", "Close"]] = [day.Open.iloc[0], day.High.max(), day.Low.min(), day.Close.iloc[-1]]
+                if pd.isna(full.loc[d0, "Volume"]) or full.loc[d0, "Volume"] == 0:
+                    full.loc[d0, "Volume"] = day.Volume.sum()
+                if "Adj Close" in full.columns:
+                    full.loc[d0, "Adj Close"] = day.Close.iloc[-1]
+                print(f"  [{sym}] {date} の日足を1時間足から復元")
+        except Exception as e:
+            print(f"  [{sym}] 1時間足の取得に失敗: {e}")
+    return full.dropna(subset=["Close"])
+
+
+def face_chart(date):
+    """チャートの形: SPY が 21日線（EMA）と 200日線（SMA）の上か下か。警報は使わない。
+    根拠: 2000-01〜2026-10 の SPY で、両方の下のとき その後20営業日に5%以上下げた割合 43%
+    （両方の上 12%、全体 18%）。上げ下げではなく値動きの大きさの目安。"""
+    h = _daily("SPY", date)["Close"]
+    h = h.dropna().loc[:pd.Timestamp(date)]   # 未確定バー（NaN）を落とす
+    if h.empty or h.index[-1] != pd.Timestamp(date) or len(h) < 200:
+        return dict(weather=None, missing=f"{date} の SPY 日足がない")
+    close = float(h.iloc[-1])
+    ema21 = float(h.ewm(span=21, adjust=False).mean().iloc[-1])
+    sma200 = float(h.rolling(200).mean().iloc[-1])
+    n_above = int(close > ema21) + int(close > sma200)
+    w = {2: "良好", 1: "様子見", 0: "注意"}[n_above]
+    return dict(weather=w, close=round(close, 2), ema21=round(ema21, 2), sma200=round(sma200, 2),
+                dist_ema21=pct(close, ema21), dist_sma200=pct(close, sma200),
+                note="両方の下: 過去はその後1か月で5%以上下げた割合43%（両方の上12%）")
+
+
+def technical(sym, date, out_png):
+    full = _daily(sym, date)
     c = full.Close
     ma = {"10 EMA": (c.ewm(span=10).mean(), T.EMA10), "21 EMA": (c.ewm(span=21).mean(), T.EMA21),
           "50 SMA": (c.rolling(50).mean(), T.SMA50), "200 SMA": (c.rolling(200).mean(), T.SMA200)}
@@ -350,12 +389,20 @@ def main():
                      progress=False, auto_adjust=True)["Close"].ffill()
     i = px.index.get_loc(pd.Timestamp(date))
     faces = dict(macro=face_macro(px, i), sentiment=face_sentiment(px, i, date), gex=face_gex(date),
-                 strength=face_strength(date), sector=face_sector(px, i))
+                 strength=face_strength(date), sector=face_sector(px, i), chart=face_chart(date))
     ws = [f["weather"] for f in faces.values() if f["weather"]]
     total = sum(SCORE[w] for w in ws)
-    view = "攻め" if total >= 2 else ("守り" if total <= -2 else "様子見")
     n_alarm = sum(w == "警報" for w in ws)
-    res = dict(date=date, faces=faces, total=total, view=view, n_faces=len(ws), n_alarm=n_alarm,
+    # 総合判定（2026-11-26〜。攻め/守りはやめ、指標と同じ言葉にそろえる）
+    if n_alarm >= 2 or (n_alarm >= 1 and total <= -4):
+        overall = "警報"
+    elif total >= 2:
+        overall = "良好"
+    elif total <= -2:
+        overall = "注意"
+    else:
+        overall = "様子見"
+    res = dict(date=date, faces=faces, total=total, overall=overall, n_faces=len(ws), n_alarm=n_alarm,
                technical={s: technical(s, date, os.path.join(OUT_DIR, f"{date}_{s}_tech.png")) for s in TECH_SYMS},
                charts=dict(macro=macro_chart(date), sentiment=sentiment_chart(date), sector=sector_chart(date, faces["sector"]), gex=gex_chart(date) if faces["gex"]["weather"] else None))
     out = os.path.join(OUT_DIR, f"{date}.json")
@@ -363,7 +410,7 @@ def main():
     print(f"FRAMEWORK={out}")
     for k, f in faces.items():
         print(f"  {k}: {f['weather'] or '計算が間に合っていない'}")
-    print(f"  合計 {total}（{len(ws)}面）→ {view}")
+    print(f"  合計 {total}（{len(ws)}指標）→ 総合判定 {overall}")
 
 
 if __name__ == "__main__":
